@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ZCU106 · up_proj GEMM FaR 硬件防护 —— 步骤 2→4 操作手册</title>
+<style>
+  :root{
+    --bg:#0f1216; --panel:#161b22; --panel2:#1c232c; --line:#2b3440;
+    --tx:#d7dee7; --tx2:#9aa7b4; --accent:#4cc2ff; --accent2:#7ee787;
+    --warn:#ffb454; --bad:#ff6b6b; --code:#0b0e12; --kw:#ff7b72; --str:#a5d6ff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--tx);
+       font:15px/1.75 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;}
+  .wrap{max-width:1040px;margin:0 auto;padding:40px 24px 90px;}
+  header{border-bottom:1px solid var(--line);padding-bottom:22px;margin-bottom:30px;}
+  h1{font-size:25px;margin:0 0 8px;letter-spacing:.3px;}
+  .sub{color:var(--tx2);font-size:14px;}
+  .badge{display:inline-block;font-size:12px;padding:2px 9px;border-radius:20px;
+         border:1px solid var(--line);background:var(--panel2);color:var(--tx2);margin-right:6px;}
+  h2{font-size:20px;margin:44px 0 14px;padding-left:13px;border-left:4px solid var(--accent);}
+  h3{font-size:16px;margin:26px 0 10px;color:#e8eef5;}
+  h4{font-size:14px;margin:18px 0 8px;color:var(--tx2);font-weight:600;}
+  p{margin:10px 0;}
+  code{font-family:"JetBrains Mono",Consolas,"Courier New",monospace;font-size:13px;}
+  p code,li code,td code{background:var(--panel2);padding:1px 6px;border-radius:5px;
+                          color:var(--str);border:1px solid var(--line);}
+  pre{position:relative;background:var(--code);border:1px solid var(--line);border-radius:10px;
+      padding:15px 16px;overflow-x:auto;margin:12px 0;}
+  pre code{color:#cdd9e5;line-height:1.62;white-space:pre;}
+  .cmt{color:#6e7d8c;} .cmdi{color:#7ee787;}
+  .copy{position:absolute;top:8px;right:8px;font-size:11px;padding:3px 9px;cursor:pointer;
+        background:var(--panel2);color:var(--tx2);border:1px solid var(--line);border-radius:6px;}
+  .copy:hover{color:var(--accent);border-color:var(--accent);}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px;}
+  th,td{border:1px solid var(--line);padding:8px 11px;text-align:left;vertical-align:top;}
+  th{background:var(--panel2);color:#e8eef5;font-weight:600;}
+  tr:nth-child(even) td{background:#131920;}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:16px 0;}
+  .note{border-left:4px solid var(--accent);background:#12212b;padding:12px 16px;border-radius:0 8px 8px 0;margin:14px 0;}
+  .warn{border-left:4px solid var(--warn);background:#241d10;padding:12px 16px;border-radius:0 8px 8px 0;margin:14px 0;}
+  .bad{border-left:4px solid var(--bad);background:#261414;padding:12px 16px;border-radius:0 8px 8px 0;margin:14px 0;}
+  .ok{border-left:4px solid var(--accent2);background:#0f2417;padding:12px 16px;border-radius:0 8px 8px 0;margin:14px 0;}
+  .note b,.warn b,.bad b,.ok b{color:#fff;}
+  ul,ol{margin:10px 0;padding-left:24px;} li{margin:5px 0;}
+  .tag{font-size:11px;padding:2px 8px;border-radius:6px;font-weight:600;}
+  .t-done{background:#12321f;color:#7ee787;border:1px solid #1f6b3a;}
+  .t-todo{background:#3a2a10;color:#ffb454;border:1px solid #7a5312;}
+  .t-crit{background:#3a1414;color:#ff8f8f;border:1px solid #7a2020;}
+  .step{display:flex;align-items:baseline;gap:10px;}
+  .step .n{flex:0 0 auto;width:26px;height:26px;line-height:26px;text-align:center;
+           background:var(--accent);color:#04121c;border-radius:50%;font-weight:700;font-size:13px;}
+  hr{border:0;border-top:1px solid var(--line);margin:34px 0;}
+  .toc{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 22px;}
+  .toc a{color:var(--accent);text-decoration:none;} .toc a:hover{text-decoration:underline;}
+  .toc ol{margin:6px 0;}
+  .kbd{font-family:Consolas,monospace;background:#000;border:1px solid var(--line);
+       border-radius:5px;padding:1px 6px;font-size:12px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>ZCU106 · up_proj GEMM 硬件 FaR 防护 —— 步骤 2 → 4 操作手册</h1>
+  <div class="sub">RTL 集成 → 重编译 bitstream → PC 侧仿真 → 板上 L2/L3/L4 软硬对比验证</div>
+  <div style="margin-top:12px">
+    <span class="badge">Vivado 2022.2</span>
+    <span class="badge">ZCU106 / ZynqMP</span>
+    <span class="badge">Ubuntu 22.04 (SD 启动)</span>
+    <span class="badge">GEMM @ 0xA0010000 · DMA @ 0xA0000000</span>
+  </div>
+</header>
+
+<div class="toc">
+  <b>目录</b>
+  <ol>
+    <li><a href="#s0">总览与当前状态核对</a></li>
+    <li><a href="#s2">步骤 2：集成 FaR RTL 并重编译 bitstream</a></li>
+    <li><a href="#s3">步骤 3：PC 侧仿真验证</a></li>
+    <li><a href="#s4">步骤 4：板上 L2 / L3 / L4 验证</a></li>
+    <li><a href="#sa">附录 A：寄存器映射 / 文件清单 / 排障</a></li>
+  </ol>
+</div>
+
+<!-- ==================================================================== -->
+<h2 id="s0">0 · 总览与当前状态核对</h2>
+
+<p>整条链条只有三件事，顺序不可颠倒：</p>
+
+<table>
+  <tr><th style="width:70px">步骤</th><th>做什么</th><th>产出</th><th>当前状态</th></tr>
+  <tr>
+    <td><b>2</b></td>
+    <td>把 <code>far_reroute.sv</code> 接进 GEMM 数据通路，重编译出<b>含 FaR 的 bitstream</b></td>
+    <td><code>up_proj_wrapper.bit.bin</code>（VERSION = 0x0002_0000）</td>
+    <td><span class="tag t-crit">必须执行</span> impl_1 里还是 10/1 的旧版</td>
+  </tr>
+  <tr>
+    <td><b>3</b></td>
+    <td>用 xsim 跑基线 + FaR 用例，确认重路由数据通路 bit-exact</td>
+    <td><code>=== PASS ===</code> × N 组；板卡基准包 <code>far_bench.bin</code></td>
+    <td><span class="tag t-done">已通过</span> 3 组 FaR 用例 bit-exact</td>
+  </tr>
+  <tr>
+    <td><b>4</b></td>
+    <td>板卡上 L2 寄存器 / L3 数据通路 / L4 硬件 FaR vs 软件 FaR</td>
+    <td><code>L4 PASS</code>：硬件 FaR 与软件 golden bit-exact，额外时间 ≈ 0</td>
+    <td><span class="tag t-todo">待执行</span> 依赖步骤 2 的新 bitstream</td>
+  </tr>
+</table>
+
+<h3>0.1 各文件当前状态</h3>
+
+<table>
+  <tr><th>类别</th><th>文件</th><th>状态</th></tr>
+  <tr><td rowspan="5">RTL<br>（步骤 2）</td>
+      <td><code>rtl/far_reroute.sv</code></td><td><span class="tag t-done">已写好</span> FaR 激活重路由引擎</td></tr>
+  <tr><td><code>rtl/gemm_up_proj_core.sv</code></td><td><span class="tag t-done">已改好</span> 新增 <code>S_REWIRE</code> 状态 + xbuf 读写口复用</td></tr>
+  <tr><td><code>rtl/gemm_up_proj_axi_lite.sv</code></td><td><span class="tag t-done">已改好</span> FaRMap 寄存器组 0x30~0x54</td></tr>
+  <tr><td><code>rtl/gemm_up_proj_top.sv</code></td><td><span class="tag t-done">已改好</span> FaR 端口透传 + VERSION=0x0002_0000</td></tr>
+  <tr><td><code>tools/add_gemm_to_bd.tcl</code></td><td><span class="tag t-done">已改好</span> RTL 文件表已含 <code>far_reroute.sv</code></td></tr>
+  <tr><td rowspan="2">仿真<br>（步骤 3）</td>
+      <td><code>tools/gen_far_vectors.py</code></td><td><span class="tag t-done">已写好</span> FaR golden + <code>.mem/.fmap</code></td></tr>
+  <tr><td><code>tools/run_sim.ps1</code></td><td><span class="tag t-done">已改好</span> 加 far_reroute.sv + FaR 用例</td></tr>
+  <tr><td rowspan="4">板上<br>（步骤 4）</td>
+      <td><code>board_test/far_bench.c</code></td><td><span class="tag t-done">已写好</span> 软硬对比主程序</td></tr>
+  <tr><td><code>board_test/run_far.sh</code></td><td><span class="tag t-done">已写好</span> L2→L3→L4 一键跑</td></tr>
+  <tr><td><code>board_test/gemm_probe.c</code> / <code>gemm_dma_test.c</code></td><td><span class="tag t-done">已改好</span> 预期 VERSION=0x0002_0000</td></tr>
+  <tr><td><code>board_test/fara-resident.c</code> / <code>fara-load-weights.sh</code></td><td><span class="tag t-done">已写好</span> 权重常驻（dma_heap，零 SD 写入）</td></tr>
+  <tr><td>基准包</td>
+      <td><code>board_test/far_bench.bin</code> + <code>.fmap</code></td>
+      <td><span class="tag t-todo">需生成</span> 用 <code>export_far_bench.py</code>（当前只有 synthetic 版）</td></tr>
+</table>
+
+<div class="warn">
+  <b>唯一硬缺口：</b> <code>up_proj_gemm.runs/impl_1/</code> 里的 bitstream 时间戳是 <b>2026/10/1</b>，
+  早于本次 FaR RTL 改动。它对应 <code>VERSION = 0x0001_0000</code>（纯 GEMM，无 FaR）。
+  不重编译的话，步骤 4 的 <code>far_bench</code> 会直接在第一关报
+  <code>PL 里不是 FaR 版 bitstream</code> 并退出。所以<b>步骤 2 必须先做</b>。
+</div>
+
+<!-- ==================================================================== -->
+<h2 id="s2">1 · 步骤 2：集成 FaR RTL 并重编译 bitstream</h2>
+
+<div class="note">
+  <b>为什么不用重新打包 IP：</b> BD 里 GEMM 是以 <b>module reference</b>
+  （<code>create_bd_cell -type module -reference gemm_up_proj_bd</code>）方式例化的，
+  <code>rtl/*.sv</code> 就是普通工程源文件。改 RTL 不需要重打包 IP，只要把新文件
+  注册进工程、再把 synth/impl 重跑一遍即可。
+</div>
+
+<h3>1.1 改动清单（已完成，仅供核对）</h3>
+
+<table>
+  <tr><th>文件</th><th>关键改动</th></tr>
+  <tr><td><code>rtl/far_reroute.sv</code></td>
+      <td>新模块。读 xbuf 的 X 激活 → 按 FaRMap 把敏感列 A 的激活 ×(1/div) 写到本列、并把同值加到 dead 列 → 写回 xbuf。含 <code>clr</code> 同步清零、<code>st_phase</code> 诊断输出。</td></tr>
+  <tr><td><code>rtl/gemm_up_proj_core.sv</code></td>
+      <td>状态机新增 <code>S_REWIRE = 4'd9</code>：<code>S_LOAD_X</code> 收完最后一拍 → <code>S_REWIRE</code> → <code>far_done</code> → <code>S_LOAD_B</code>。xbuf 读写口在 S_REWIRE 期间交给 <code>u_far</code>。</td></tr>
+  <tr><td><code>rtl/gemm_up_proj_axi_lite.sv</code></td>
+      <td>新增 FaRMap 间接寻址寄存器组 <code>0x30~0x54</code>，VERSION 改为 <code>0x0002_0000</code>。</td></tr>
+  <tr><td><code>rtl/gemm_up_proj_top.sv</code></td>
+      <td>FaR 连线从 axi_lite 透传到 core，<code>const_version = 32'h0002_0000</code>。</td></tr>
+  <tr><td><code>tools/add_gemm_to_bd.tcl</code></td>
+      <td>RTL 文件表加入 <code>far_reroute.sv</code>（缺了会在综合时报 <code>module not found</code>）。</td></tr>
+</table>
+
+<h3>1.2 把 <code>far_reroute.sv</code> 注册进工程 + 校验 BD</h3>
+
+<p>这一步是<b>必须的</b>：新文件 <code>far_reroute.sv</code> 目前不在 <code>sources_1</code> 里，
+不注册的话综合会因 <code>u_far</code> 例化找不到模块而失败。脚本是幂等的，重复跑不会报错。</p>
+
+<h4>方式 A（推荐，batch 批处理）</h4>
+<pre><button class="copy">copy</button><code><span class="cmt"># 前提：Vivado 工程没有在 GUI 里打开（batch 会锁工程）</span>
+cd C:\Users\houji\Desktop\doc\study\llm-fpga-security-literature\fara-reproduction\fpga\up_proj_gemm
+
+&amp; "D:\Download\Xilinx_Vivado\Vivado\2022.2\bin\vivado.bat" -mode batch -source tools\add_gemm_to_bd.tcl</code></pre>
+
+<h4>方式 B（已在 GUI 中打开工程时）</h4>
+<pre><button class="copy">copy</button><code><span class="cmt"># 在 Vivado Tcl Console 里：</span>
+source C:/Users/houji/Desktop/doc/study/llm-fpga-security-literature/fara-reproduction/fpga/up_proj_gemm/tools/add_gemm_to_bd.tcl</code></pre>
+
+<p><b>判据（日志尾部应出现）：</b></p>
+<pre><button class="copy">copy</button><code>== FP_IP_LATENCY mul=8 (want 8)  add=4 (want 4)
+== added .../rtl/far_reroute.sv          <span class="cmt"># 或 == already in project: far_reroute.sv</span>
+== BD_SAVED
+== MAP ... offset=0xA0010000 range=64K
+== ADD_GEMM_DONE</code></pre>
+
+<div class="warn">
+  若出现 <code>FP IP latency mismatch</code>：说明 <code>fp32_mul_ip / fp32_add_ip</code> 的
+  C_Latency 与 RTL 参数（MUL=8 / ADD=4）不一致，脚本会自动重建 IP，重跑一次即可。
+</div>
+
+<h3>1.3 重编译 + bootgen 转 <code>.bit.bin</code></h3>
+
+<pre><button class="copy">copy</button><code><span class="cmt"># 仍在本工程根目录；脚本内部会 reset synth_1/impl_1 与 BD OOC 后整条重跑</span>
+powershell -ExecutionPolicy Bypass -File tools\rebuild_bitstream.ps1</code></pre>
+
+<p>脚本做两件事：</p>
+<ol>
+  <li><code>rebuild_bitstream.tcl</code>：<code>reset_run synth_1 / impl_1</code> + 按模式匹配重置 BD OOC 运行
+      （<code>*bd_0_0_synth_1</code>）→ <code>launch_runs synth_1</code> → <code>launch_runs impl_1 -to_step write_bitstream</code>。
+      <b>必须连 BD OOC 一起重置</b>，否则旧的 GEMM 网表会被复用，新 RTL 到不了 bitstream。</li>
+  <li><code>bootgen</code>：<code>up_proj_wrapper.bit</code> → <code>up_proj_wrapper.bit.bin</code>
+      （<code>fpga_manager</code> 只认 <code>.bit.bin</code>）。</li>
+</ol>
+
+<p><b>期望输出：</b></p>
+<pre><button class="copy">copy</button><code>== synth_1 STATUS: synth_design Complete!
+== impl_1 STATUS: write_bitstream Complete!
+== impl_1 WNS: &lt;一个数值&gt; ns
+== BITSTREAM: ...\up_proj_gemm.runs\impl_1\up_proj_wrapper.bit
+== REBUILD_DONE
+...
+FullName                                 Length LastWriteTime
+--------                                 ------ -------------
+...\impl_1\up_proj_wrapper.bit        193xxxxx 2026/10/x  xx:xx
+...\impl_1\up_proj_wrapper.bit.bin    193xxxxx 2026/10/x  xx:xx</code></pre>
+
+<div class="bad">
+  <b>常见坑</b>
+  <ul style="margin:6px 0">
+    <li><code>synth_1 did not complete</code>：多为 <code>far_reroute.sv</code> 没注册进工程（回到 1.2）。</li>
+    <li><code>impl_1 did not complete</code> + WNS 为负：时序未收敛，检查时钟约束；先看 <code>rebuild_bitstream.log</code>。</li>
+    <li>Windows 计算机名含非 ASCII 字符会让 Vivado 的 Tcl 解释器崩溃——确认机器名是纯英文。</li>
+  </ul>
+</div>
+
+<h3>1.4 步骤 2 验收</h3>
+<ol>
+  <li><code>impl_1/up_proj_wrapper.bit</code> 与 <code>.bit.bin</code> 的<b>时间戳刷新</b>为刚才；</li>
+  <li>步骤 3 的仿真里 <code>VERSION</code> 读回 <code>0x0002_0000</code>；</li>
+  <li>板上烧录后 <code>gemm_probe</code> 的 <code>VERSION</code> 也读回 <code>0x0002_0000</code>（这是判断"板卡里是不是 FaR 版"的唯一硬指标）。</li>
+</ol>
+
+<!-- ==================================================================== -->
+<h2 id="s3">2 · 步骤 3：PC 侧仿真验证</h2>
+
+<div class="note">
+  仿真用 <b>行为级</b> fp32 模型（<code>sim/fp32_ops_behav.sv</code>），
+  <b>不要</b>把 <code>rtl/fp32_mul.sv</code> / <code>rtl/fp32_add.sv</code> 一起编译——它们与行为模型同名会冲突。
+  <code>run_sim.ps1</code> 已处理好这个编译集合。
+</div>
+
+<h3>2.1 前置</h3>
+<pre><button class="copy">copy</button><code>python -c "import numpy; print(numpy.__version__)"
+Test-Path "D:\Download\Xilinx_Vivado\Vivado\2022.2\bin\xsim.bat"   <span class="cmt"># 应为 True</span></code></pre>
+
+<h3>2.2 一键跑（基线 + FaR 两个阶段）</h3>
+<pre><button class="copy">copy</button><code>cd C:\Users\houji\Desktop\doc\study\llm-fpga-security-literature\fara-reproduction\fpga\up_proj_gemm
+powershell -ExecutionPolicy Bypass -File tools\run_sim.ps1</code></pre>
+
+<p>分阶段跑（调试时更快）：</p>
+<pre><button class="copy">copy</button><code>powershell -ExecutionPolicy Bypass -File tools\run_sim.ps1 -Only base   <span class="cmt"># 只跑基线 4 组</span>
+powershell -ExecutionPolicy Bypass -File tools\run_sim.ps1 -Only far    <span class="cmt"># 只跑 FaR 3 组</span></code></pre>
+
+<p><b>用例矩阵：</b></p>
+<table>
+  <tr><th>阶段</th><th>用例（K, N, M_TOTAL, M_TILE, G, ADD_LAT, MUL_LAT[, N_FAR, DIV, DEADZERO]）</th><th>验什么</th></tr>
+  <tr><td rowspan="4">基线</td><td>(16, 2, 64, 16, 8, 4, 8)</td><td>K 被 G 整除</td></tr>
+  <tr><td>(13, 4, 64, 16, 8, 4, 8)</td><td>K 不被 G 整除 + 多 token + 多趟</td></tr>
+  <tr><td>(5, 4, 64, 16, 8, 4, 8)</td><td>K &lt; G：尾部部分和链无乘积</td></tr>
+  <tr><td>(8, 1, 64, 16, 8, 4, 8)</td><td>K == G：单 token</td></tr>
+  <tr><td rowspan="3">FaR</td><td>(16, 2, …, 4, 2, 0)</td><td>4 条条目，dead 稠密 → 只验数据通路 bit-exact</td></tr>
+  <tr><td>(32, 4, …, 8, 2, 1)</td><td>8 条条目 + dead≈0 → 同时验守恒</td></tr>
+  <tr><td>(24, 3, …, 6, 2, 0)</td><td>6 条条目，K 非 2 的幂</td></tr>
+</table>
+
+<h3>2.3 手工单跑 FaR 用例（逐步，可选）</h3>
+
+<pre><button class="copy">copy</button><code>cd C:\Users\houji\Desktop\doc\study\llm-fpga-security-literature\fara-reproduction\fpga\up_proj_gemm
+
+<span class="cmt"># (1) 生成 FaR 激励 + golden + FaRMap</span>
+python tools\gen_far_vectors.py --k 32 --n 4 --m-total 64 --m-tile 16 ^
+       --g 8 --add-lat 4 --mul-lat 8 --n-far 8 --div 2 --dead-zero ^
+       --out sim_work\far_vectors.mem
+
+<span class="cmt"># (2) 编译（注意：不含 rtl\fp32_mul.sv / rtl\fp32_add.sv）</span>
+&amp; "D:\Download\Xilinx_Vivado\Vivado\2022.2\bin\xvlog.bat" -sv ^
+   rtl\gemm_up_proj_core.sv rtl\gemm_up_proj_axi_lite.sv rtl\gemm_up_proj_top.sv ^
+   rtl\far_reroute.sv sim\fp32_ops_behav.sv sim\tb_gemm_up_proj.sv
+
+<span class="cmt"># (3) 精化</span>
+&amp; "D:\Download\Xilinx_Vivado\Vivado\2022.2\bin\xelab.bat" tb_gemm_up_proj -s tb_sim
+
+<span class="cmt"># (4) 仿真。plusarg 必须走 -f 响应文件：xsim 经 loader.bat 转发时会按 '='</span>
+<span class="cmt">#     拆参数，直接写 -testplusarg "VEC=x.mem" 会报 "Expected a switch but found f"</span>
+Set-Content sim_work\xsim_args.txt -Encoding ascii -Value @(
+  '-testplusarg "VEC=far_vectors.mem"',
+  '-testplusarg "FARMAP=far_vectors.fmap"'
+)
+cd sim_work
+&amp; "D:\Download\Xilinx_Vivado\Vivado\2022.2\bin\xsim.bat" tb_sim -f xsim_args.txt -runall</code></pre>
+
+<p><b>通过时的关键行：</b></p>
+<pre><button class="copy">copy</button><code>[TB] 向量头: K=32 N=4 M_TOTAL=64 M_TILE=16 G=8 ADD_LAT=4 MUL_LAT=8 N_IN=2240 N_OUT=256
+[TB] FaRMap 载入 8 条 &lt;- far_vectors.fmap
+[TB] 期望 FAR_HITS = 64（= N * Σ(1+nd)）
+[TB] STATUS = 00000072 (busy=0 done=1 err=0 state=7)
+[TB] FAR_HITS = 64（期望 64）OK
+[TB] FAR_PHASE = 0 (R_IDLE) OK
+=== PASS ===  bit-exact，256 输出字全部一致，2240 输入字全部消费</code></pre>
+
+<h3>2.4 生成板卡用「软硬对比」基准包</h3>
+
+<p>仿真证明数据通路对；板卡 L4 要回答的是「真实 GPT-2 激活下，硬件 FaR 是否 = 软件 FaR」。
+这一步生成 L4 的输入包 <code>far_bench.bin</code> + <code>far_bench.fmap</code>。</p>
+
+<pre><button class="copy">copy</button><code>cd C:\Users\houji\Desktop\doc\study\llm-fpga-security-literature\fara-reproduction\fpga\up_proj_gemm
+
+<span class="cmt"># 真实 GPT-2 第 0 层 up_proj 激活（需 transformers + 本地 gpt2 权重）</span>
+python tools\export_far_bench.py --n 1 --out board_test\far_bench.bin
+
+<span class="cmt"># 无 transformers 时用合成激活（CI / 先跑通流程）</span>
+python tools\export_far_bench.py --synthetic --n 1 --out board_test\far_bench.bin
+
+<span class="cmt"># 已有激活 .npy（[N,768] fp32）</span>
+python tools\export_far_bench.py --x-npy X.npy --out board_test\far_bench.bin</code></pre>
+
+<p><b>产出：</b><code>far_bench.bin</code>（约 9.49 MB）、<code>far_bench.fmap</code>（FaRMap 文本）、<code>far_bench.json</code>（元数据 + 软件计时 + 守恒统计）。</p>
+
+<pre><button class="copy">copy</button><code>[OK] 写出 ...\board_test\far_bench.bin  (9.49 MB)
+[OK] 写出 ...\board_test\far_bench.fmap
+     输入 2363136 字（1181568 beat）  期望输出 3072 字 × 3 份
+     FAR_HITS 应为 16                <span class="cmt"># = N(1) × Σ(1+nd) = 1 × 8×2</span>
+[守恒] max|Y_far-Y_base| = ...  相对 ...
+[计时] 软件 Linear ... us   软件 FaR forward ... us   FaR 额外开销 ... us</code></pre>
+
+<div class="note">
+  <b>FBEN 包内容：</b>输入是 <code>[X_raw | b | W_shadow]</code>——X 是<b>原始</b>激活，
+  重路由由 PL 现场做；同时打包了三份软件 golden：
+  <code>Y_far</code>（重路由 + shadow W）、<code>Y_shadow</code>（不重路由 + shadow W）、
+  <code>Y_base</code>（不重路由 + 原始 W，用于算守恒）。
+</div>
+
+<!-- ==================================================================== -->
+<h2 id="s4">3 · 步骤 4：板上 L2 / L3 / L4 验证</h2>
+
+<div class="bad">
+  <b>第一原则：运行期绝不对 SD 卡 ext4 rootfs 写一个字节。</b><br>
+  上次卡死的直接原因是 rootfs 的 ext4 日志区写失败
+  （<code>ext4_journal_check_start: Detected aborted journal</code>），内核把文件系统整体置只读 → 系统死。
+  因此所有工作目录、编译产物、日志一律落在 <b><code>/dev/shm</code>（tmpfs，内存）</b>下。
+  不要 <code>cd</code> 到 <code>~</code> 或其它 rootfs 目录编译运行。
+</div>
+
+<h3>3.1 网络与登录</h3>
+
+<table>
+  <tr><th>项目</th><th>值</th></tr>
+  <tr><td>板卡 IP</td><td><code>192.168.1.200</code>（<code>eth0</code>，板载 RJ45 千兆）</td></tr>
+  <tr><td>PC IP</td><td><code>192.168.1.100</code>（同网段直连/交换机）</td></tr>
+  <tr><td>登录</td><td><code>ubuntu@192.168.1.200</code>，SSH TCP 22</td></tr>
+  <tr><td>板上工作目录</td><td><code>/dev/shm/l4</code>（tmpfs）</td></tr>
+</table>
+
+<pre><button class="copy">copy</button><code><span class="cmt"># PC (PowerShell)：先确认能通</span>
+ping 192.168.1.200
+ssh ubuntu@192.168.1.200 "uname -a; df -h /dev/shm"</code></pre>
+
+<h3>3.2 建目录并传文件（scp，推荐）</h3>
+
+<pre><button class="copy">copy</button><code><span class="cmt"># PC (PowerShell)：进入工程目录</span>
+cd C:\Users\houji\Desktop\doc\study\llm-fpga-security-literature\fara-reproduction\fpga\up_proj_gemm
+
+<span class="cmt"># 板上建工作目录（tmpfs）</span>
+ssh ubuntu@192.168.1.200 "mkdir -p /dev/shm/l4"
+
+<span class="cmt"># (a) 源码 / 脚本</span>
+scp board_test\gemm_probe.c board_test\gemm_dma_test.c board_test\far_bench.c `
+    board_test\run_far.sh ubuntu@192.168.1.200:/dev/shm/l4/
+
+<span class="cmt"># (b) 向量 / 基准包</span>
+scp board_test\gemm_vectors_k768n1.bin board_test\far_bench.bin `
+    board_test\far_bench.fmap ubuntu@192.168.1.200:/dev/shm/l4/
+
+<span class="cmt"># (c) FaR 版 bitstream（步骤 2 的产物）</span>
+scp up_proj_gemm.runs\impl_1\up_proj_wrapper.bit.bin ubuntu@192.168.1.200:/dev/shm/l4/
+
+<span class="cmt"># 校验落盘完整（bitstream 约 19 MB，缺斤少两就是没传完）</span>
+ssh ubuntu@192.168.1.200 "ls -l /dev/shm/l4"</code></pre>
+
+<div class="note">
+  <b>备选：HTTP 拉取。</b> PC 侧在工程目录起
+  <code>python -m http.server 8000</code>，板上用
+  <code>curl -fsSL http://192.168.1.100:8000/&lt;文件&gt; -o /dev/shm/l4/&lt;文件&gt;</code>。
+  注意 URL 里<b>不能有空格</b>（<code>http:// $PC :8000</code> 这种写法会卡死/报
+  <code>URL using bad/illegal format</code>）。scp 更省事，优先用 scp。
+</div>
+
+<h3>3.3 烧录 bitstream（fpga_manager）</h3>
+
+<pre><button class="copy">copy</button><code>ssh ubuntu@192.168.1.200
+cd /dev/shm/l4
+
+<span class="cmt"># 1) 让 firmware_class 去 /dev/shm/l4 找固件（tmpfs，不碰 SD）</span>
+sudo sh -c 'echo -n /dev/shm/l4 > /sys/module/firmware_class/parameters/path'
+
+<span class="cmt"># 2) 加载 PL（sysfs 方式等价于 flags=0 全量配置）</span>
+sudo sh -c 'echo up_proj_wrapper.bit.bin > /sys/class/fpga_manager/fpga0/firmware'
+
+<span class="cmt"># 3) 确认状态</span>
+cat /sys/class/fpga_manager/fpga0/state
+<span class="cmt"># 期望输出：operating</span></code></pre>
+
+<div class="warn">
+  若 <code>state</code> 不是 <code>operating</code>：查 <code>dmesg | tail -30</code>。
+  常见原因：bitstream 是旧格式（未用 bootgen 转 <code>.bit.bin</code>）、固件路径没设对、
+  或 BOOT.BIN 里的 PS 配置与当前 XSA 不匹配。
+</div>
+
+<h3>3.4 一键跑 L2 → L3 → L4</h3>
+
+<pre><button class="copy">copy</button><code>cd /dev/shm/l4
+sudo sh run_far.sh
+<span class="cmt"># 或显式指定文件名：</span>
+<span class="cmt"># sudo sh run_far.sh gemm_vectors_k768n1.bin far_bench.bin</span></code></pre>
+
+<p><code>run_far.sh</code> 内部流程：</p>
+<table>
+  <tr><th>阶段</th><th>程序</th><th>验什么</th><th>失败退出码</th></tr>
+  <tr><td>[0] 环境自检</td><td>—</td><td><code>/dev/dma_heap/reserved</code> 存在、<code>fpga_manager state=operating</code>、三个输入文件齐全</td><td>1</td></tr>
+  <tr><td>[1] 编译</td><td><code>cc -O2</code></td><td>就地编译 <code>gemm_probe / gemm_dma_test / far_bench</code></td><td>1</td></tr>
+  <tr><td>[2] L2</td><td><code>gemm_probe</code></td><td>AXI-Lite 寄存器 + FaRMap 寄存器组读写、地址译码、VERSION=0x0002_0000</td><td>2</td></tr>
+  <tr><td>[3] L3</td><td><code>gemm_dma_test</code></td><td>DMA 端到端对 golden，<code>far_en=0</code> 纯 GEMM 通路</td><td>3</td></tr>
+  <tr><td>[4] L4</td><td><code>far_bench</code></td><td>硬件 FaR vs 软件 FaR（两跑对比 + 计时 + FAR_HITS/PHASE）</td><td>4</td></tr>
+</table>
+
+<h3>3.5 L4 通过时的输出（判据）</h3>
+
+<pre><button class="copy">copy</button><code>=== up_proj L4: hardware FaR vs software FaR ===
+[1] map PL registers
+    GEMM VERSION = 0x00020000   expect 0x00020000   OK
+[4] program FaRMap (8 entries)
+    FAR_A[0]=0x01E0 (want 0x01E0)  FAR_INV[0]=0x3F000000 (want 0x3F000000)  OK   <span class="cmt"># A[0]=480</span>
+    expected FAR_HITS = 16 (= N * sum(1+nd))
+[5] run A: far_en=0 (baseline passthrough, shadow W)
+    time min=x.xxx ms  avg=x.xxx ms
+    mismatches vs Y_shadow: 0 / 3072   OK
+[6] run B: far_en=1 (hardware activation reroute)
+    time min=x.xxx ms  avg=x.xxx ms
+    mismatches vs Y_far:    0 / 3072   OK
+    FAR_HITS  = 16 (expect 16)   OK
+    FAR_PHASE = 0 (expect 0)     OK
+[7] summary
+    hardware baseline vs sw Y_shadow : BIT-EXACT
+    hardware FaR      vs sw Y_far    : BIT-EXACT
+    FAR_HITS/PHASE diagnostics       : OK
+    hw FaR extra time (min)          : x.x us  (x.xx% of run)
+    conservation |Y_far-Y_base| max  : x.xxxe-xx  (rel x.xxxe-xx)
+&gt;&gt;&gt; L4 PASS: hardware FaR == software FaR (bit-exact), and it costs ~0 extra time.</code></pre>
+
+<div class="ok">
+  <b>这三行就是整个 FaR 硬件化的结论：</b>
+  <ol style="margin:6px 0">
+    <li><b>BIT-EXACT</b>：硬件 FaR 输出 = 软件 FaR golden（逐 bit），硬件忠实复刻软件语义；</li>
+    <li><b>BIT-EXACT</b>：<code>far_en=0</code> 时输出 = shadow golden，即关掉 FaR 就是普通 GEMM；</li>
+    <li><b>extra time ≈ 0</b>：FaR 的额外代价被吃进数据通路（S_REWIRE 一相），不占 CPU、不增加墙钟时间——
+        这正是「硬件防护优于软件防护」的直接证据。</li>
+  </ol>
+</div>
+
+<h3>3.6 权重常驻（可选，后续推理服务用）</h3>
+
+<p>L2/L3/L4 每次自己从 <code>/dev/shm</code> 取数，不需要常驻。等到要把 up_proj 接进
+完整推理循环、反复喂激活时，用 <code>fara-resident</code> 把 <b>W/b/cfg 一次性钉进
+物理连续内存</b>，之后只搬激活 X，源文件与 SD 卡不再参与。</p>
+
+<pre><button class="copy">copy</button><code><span class="cmt"># 板上：源目录放好 board_W_*.bin / board_b_*.bin / board_cfg_*.json</span>
+<span class="cmt"># 三种源任选：http://host:port | /dev/sda1(U盘) | 目录</span>
+sudo sh /dev/shm/l4/fara-load-weights.sh /dev/shm/fara-models
+
+<span class="cmt"># 另开一个终端看它公布的物理地址</span>
+cat /run/fara-resident.json</code></pre>
+
+<p>常驻守护只写两处：<code>/dev/dma_heap</code>（内存）与 <code>/run</code>（tmpfs），
+rootfs 全程零写入。做开机自启：</p>
+
+<pre><button class="copy">copy</button><code>sudo cp fara-resident.c fara-load-weights.sh /usr/local/bin/
+sudo chmod +x /usr/local/bin/fara-load-weights.sh
+sudo cp fara-weights.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now fara-weights.service
+systemctl status fara-weights.service --no-pager</code></pre>
+
+<!-- ==================================================================== -->
+<h2 id="sa">附录 A · 寄存器映射 / 文件清单 / 排障</h2>
+
+<h3>A.1 GEMM AXI-Lite 寄存器（基址 0xA0010000，64 KB）</h3>
+<table>
+  <tr><th>偏移</th><th>名称</th><th>属性</th><th>说明</th></tr>
+  <tr><td>0x00</td><td>CTRL</td><td>W</td><td>[0]start [1]soft_rst(自清) [2]irq_en</td></tr>
+  <tr><td>0x04</td><td>STATUS</td><td>R</td><td>[0]busy [1]done [2]err [3]irq [7:4]state</td></tr>
+  <tr><td>0x08</td><td>M_ROWS</td><td>R</td><td>M_TILE = 16</td></tr>
+  <tr><td>0x0C</td><td>K_COLS</td><td>RW</td><td>规约深度 K，复位 768</td></tr>
+  <tr><td>0x10</td><td>N_TOKENS</td><td>RW</td><td>token 数 N，复位 1</td></tr>
+  <tr><td>0x14</td><td>LAYER_ID</td><td>RW</td><td>层标识（far_bench 里借它传 far_en 便于观察）</td></tr>
+  <tr><td>0x18</td><td>VERSION</td><td>R</td><td><b>0x0002_0000</b>（FaR 版）；0x0001_0000 = 旧纯 GEMM</td></tr>
+  <tr><td>0x1C</td><td>N_TILES</td><td>R</td><td>M_TOTAL/M_TILE = 192</td></tr>
+  <tr><td>0x20</td><td>IN_WORDS</td><td>R</td><td>已消费输入字数</td></tr>
+  <tr><td>0x24</td><td>OUT_WORDS</td><td>R</td><td>已产出输出字数</td></tr>
+  <tr><td>0x28</td><td>TILE_IDX</td><td>R</td><td>当前趟号（跑完 = 191）</td></tr>
+  <tr><td>0x2C</td><td>STATE</td><td>R</td><td>FSM 状态码（跑完 = 7；9 = S_REWIRE）</td></tr>
+  <tr><td colspan="4" style="background:#101820;color:var(--accent)"><b>FaRMap 寄存器组（间接寻址：先写 FAR_IDX，再读写 FAR_A/INV/ND/D0/D1）</b></td></tr>
+  <tr><td>0x30</td><td>FAR_CTRL</td><td>RW</td><td>[0] far_en（0=基线直通，1=启用激活重路由）</td></tr>
+  <tr><td>0x34</td><td>FAR_NENT</td><td>RW</td><td>[4:0] 条目数（0..16）</td></tr>
+  <tr><td>0x38</td><td>FAR_IDX</td><td>RW</td><td>[3:0] 当前条目下标</td></tr>
+  <tr><td>0x3C</td><td>FAR_A</td><td>RW</td><td>[15:0] 敏感输入通道 A</td></tr>
+  <tr><td>0x40</td><td>FAR_INV</td><td>RW</td><td>fp32 1/div（div=2 → 0x3F000000）</td></tr>
+  <tr><td>0x44</td><td>FAR_ND</td><td>RW</td><td>[1:0] dead lane 条数（1..2）</td></tr>
+  <tr><td>0x48</td><td>FAR_D0</td><td>RW</td><td>[15:0] dead 通道 #0</td></tr>
+  <tr><td>0x4C</td><td>FAR_D1</td><td>RW</td><td>[15:0] dead 通道 #1</td></tr>
+  <tr><td>0x50</td><td>FAR_HITS</td><td>R</td><td>本次重路由实际改写元素数（= N·Σ(1+nd)）</td></tr>
+  <tr><td>0x54</td><td>FAR_PHASE</td><td>R</td><td>far_reroute 相位码（空闲 = 0）</td></tr>
+  <tr><td>其它</td><td>未映射</td><td>R</td><td>返回 0xDEADBEEF</td></tr>
+</table>
+
+<h3>A.2 AXI DMA 寄存器（基址 0xA0000000，Simple 模式，PG021）</h3>
+<table>
+  <tr><th>偏移</th><th>名称</th><th>说明</th></tr>
+  <tr><td>0x00 / 0x04</td><td>MM2S_DMACR / DMASR</td><td>发送通道控制/状态</td></tr>
+  <tr><td>0x18 / 0x1C</td><td>MM2S_SA / SA_MSB</td><td>源物理地址</td></tr>
+  <tr><td>0x28</td><td>MM2S_LENGTH</td><td>发送字节数（启动 MM2S）</td></tr>
+  <tr><td>0x30 / 0x34</td><td>S2MM_DMACR / DMASR</td><td>接收通道控制/状态</td></tr>
+  <tr><td>0x48 / 0x4C</td><td>S2MM_DA / DA_MSB</td><td>目的物理地址</td></tr>
+  <tr><td>0x58</td><td>S2MM_LENGTH</td><td>接收字节数（启动 S2MM）</td></tr>
+</table>
+
+<h3>A.3 板上文件清单（<code>/dev/shm/l4</code>）</h3>
+<table>
+  <tr><th>文件</th><th>来源</th><th>作用</th></tr>
+  <tr><td><code>run_far.sh</code></td><td><code>board_test/</code></td><td>L2→L3→L4 一键跑</td></tr>
+  <tr><td><code>gemm_probe.c</code></td><td><code>board_test/</code></td><td>L2 寄存器探针（含 FaRMap）</td></tr>
+  <tr><td><code>gemm_dma_test.c</code></td><td><code>board_test/</code></td><td>L3 DMA 端到端对 golden</td></tr>
+  <tr><td><code>far_bench.c</code></td><td><code>board_test/</code></td><td>L4 硬件 FaR vs 软件 FaR</td></tr>
+  <tr><td><code>gemm_vectors_k768n1.bin</code></td><td><code>board_test/</code></td><td>L3 向量（K=768,N=1,M_TOTAL=3072）</td></tr>
+  <tr><td><code>far_bench.bin</code> + <code>.fmap</code></td><td><code>export_far_bench.py</code></td><td>L4 基准包 + FaRMap</td></tr>
+  <tr><td><code>up_proj_wrapper.bit.bin</code></td><td>步骤 2 产物</td><td>含 FaR 的 PL 比特流</td></tr>
+</table>
+
+<h3>A.4 排障对照表</h3>
+<table>
+  <tr><th>现象</th><th>原因</th><th>处理</th></tr>
+  <tr><td>L2: <code>VERSION = 0x00010000</code> FAIL</td><td>板卡里还是旧 bitstream</td><td>回步骤 2 重编译，重烧 <code>.bit.bin</code></td></tr>
+  <tr><td>L2: 未映射偏移不是 0xDEADBEEF</td><td>地址译码 / BD 地址段错</td><td>查 Address Editor：GEMM S_AXI = 0xA0010000 / 64K</td></tr>
+  <tr><td>L3: 输出全 <code>0xA5A5A5A5</code>，<code>err=1</code></td><td><code>in_cnt != in_total</code> 或末拍无 tlast</td><td>检查 <code>in_tlast_seen</code> 单驱动逻辑</td></tr>
+  <tr><td>L3: 数值不一致但 err=0</td><td>累加顺序契约不符</td><td>确认 <code>G=8 / ADD_LAT=4 / MUL_LAT=8</code> 与 RTL 一致；向量来自同一 <code>gen_golden_vectors.py</code></td></tr>
+  <tr><td>L4: <code>FAR_HITS</code> 不符</td><td>FaRMap 条目数/nd 与 golden 不一致</td><td>确认用的是同一份 <code>.fmap</code>；期望值 = N·Σ(1+nd)</td></tr>
+  <tr><td>L4: <code>FAR_PHASE != 0</code></td><td>重路由未跑完（事务结束后相位没回 R_IDLE）</td><td>多为 <code>cfg_soft_rst</code> 未接 <code>far_reroute.clr</code>，或时序不匹配</td></tr>
+  <tr><td><code>dma_heap alloc</code> 失败</td><td>无 <code>/dev/dma_heap/reserved</code></td><td>检查内核命令行 <code>cma=</code>；<code>ls /dev/dma_heap/</code></td></tr>
+  <tr><td><code>open /dev/mem</code> 失败</td><td>没用 root</td><td><code>sudo ./xxx</code></td></tr>
+  <tr><td>板卡跑着跑着卡死</td><td>写了 SD 卡 rootfs（ext4 日志 abort）</td><td>所有操作限定在 <code>/dev/shm</code>；查 <code>dmesg | grep -iE "ext4|mmcblk"</code></td></tr>
+  <tr><td>scp 报 <code>Could not resolve hostname</code></td><td>目标写了占位符/中文</td><td>用真实 IP：<code>ubuntu@192.168.1.200</code></td></tr>
+  <tr><td><code>curl: URL using bad/illegal format</code></td><td>URL 变量周围有空格</td><td>写 <code>http://$PC:8000/</code>，不要 <code>http:// $PC :8000/</code></td></tr>
+</table>
+
+<h3>A.5 完整命令速查（从零到 L4 PASS）</h3>
+<pre><button class="copy">copy</button><code><span class="cmt"># ===== PC 侧 =====</span>
+cd C:\Users\houji\Desktop\doc\study\llm-fpga-security-literature\fara-reproduction\fpga\up_proj_gemm
+
+<span class="cmt"># 步骤 2：注册 RTL + 重编译 bitstream</span>
+&amp; "D:\Download\Xilinx_Vivado\Vivado\2022.2\bin\vivado.bat" -mode batch -source tools\add_gemm_to_bd.tcl
+powershell -ExecutionPolicy Bypass -File tools\rebuild_bitstream.ps1
+
+<span class="cmt"># 步骤 3：仿真 + 生成板卡基准包</span>
+powershell -ExecutionPolicy Bypass -File tools\run_sim.ps1
+python tools\export_far_bench.py --n 1 --out board_test\far_bench.bin
+
+<span class="cmt"># 步骤 4：传文件</span>
+ssh ubuntu@192.168.1.200 "mkdir -p /dev/shm/l4"
+scp board_test\gemm_probe.c board_test\gemm_dma_test.c board_test\far_bench.c board_test\run_far.sh ubuntu@192.168.1.200:/dev/shm/l4/
+scp board_test\gemm_vectors_k768n1.bin board_test\far_bench.bin board_test\far_bench.fmap ubuntu@192.168.1.200:/dev/shm/l4/
+scp up_proj_gemm.runs\impl_1\up_proj_wrapper.bit.bin ubuntu@192.168.1.200:/dev/shm/l4/
+
+<span class="cmt"># ===== 板卡侧 =====</span>
+ssh ubuntu@192.168.1.200
+cd /dev/shm/l4
+sudo sh -c 'echo -n /dev/shm/l4 > /sys/module/firmware_class/parameters/path'
+sudo sh -c 'echo up_proj_wrapper.bit.bin > /sys/class/fpga_manager/fpga0/firmware'
+cat /sys/class/fpga_manager/fpga0/state      <span class="cmt"># 期望 operating</span>
+sudo sh run_far.sh                            <span class="cmt"># 期望 L2/L3/L4 全 PASS</span></code></pre>
+
+<hr>
+<p style="color:var(--tx2);font-size:13px">
+  本手册与仓库内脚本一一对应：<code>tools/add_gemm_to_bd.tcl</code>、<code>tools/rebuild_bitstream.ps1</code>、
+  <code>tools/run_sim.ps1</code>、<code>tools/gen_far_vectors.py</code>、<code>tools/export_far_bench.py</code>、
+  <code>board_test/run_far.sh</code>、<code>board_test/far_bench.c</code>、<code>board_test/gemm_probe.c</code>、
+  <code>board_test/gemm_dma_test.c</code>、<code>board_test/fara-resident.c</code>。
+  脚本改动后请同步更新本手册对应命令。
+</p>
+
+</div>
+
+<script>
+document.querySelectorAll('.copy').forEach(function(btn){
+  btn.addEventListener('click', function(){
+    var code = btn.parentElement.querySelector('code').innerText;
+    navigator.clipboard.writeText(code).then(function(){
+      var t = btn.innerText; btn.innerText = 'copied';
+      setTimeout(function(){ btn.innerText = t; }, 1200);
+    });
+  });
+});
+</script>
+</body>
+</html>

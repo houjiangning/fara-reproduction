@@ -1,0 +1,29 @@
+{
+  "as_of": "2026-10-08",
+  "layer": "transformer.h.0.mlp.c_fc",
+  "note": "同层对照。硬件实测取自板卡 L4 运行（run_far_board.log）；软件实测取自同层 up_proj 的 torch 前向（far_bench.json, reps=50）。开销口径 = 纯 FaR 部分，不含各自基座推理时间。",
+  "hardware": {
+    "base_run_ms": 25.473,
+    "far_run_ms": 25.492,
+    "far_extra_us": 18.1,
+    "far_extra_pct": 0.07,
+    "far_hits": 16,
+    "far_phase": 0,
+    "bit_exact_vs_sw": true,
+    "source": "fpga/up_proj_gemm/board_test/run_far_board.log"
+  },
+  "software": {
+    "base_linear_ms": 0.117718,
+    "far_forward_ms": 0.578564,
+    "far_overhead_ms": 0.460846,
+    "far_overhead_us": 460.846,
+    "reps": 50,
+    "source": "fpga/up_proj_gemm/board_test/far_bench.json"
+  },
+  "speedup": 25.46,
+  "conservation": {
+    "max_abs_err": 0.263045072555542,
+    "rel_err": 0.048766032079850884
+  },
+  "protection_curve_source": "eval_benchmark_far_h0_cfc.json"
+}

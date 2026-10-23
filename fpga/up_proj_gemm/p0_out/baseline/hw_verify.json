@@ -1,0 +1,110 @@
+{
+  "as_of": "2026-10-08",
+  "title": "硬件 FaR 端到端验证快照 · ZCU106",
+  "board": {
+    "host": "zynqmp (ZCU106)",
+    "ip": "192.168.1.200",
+    "kernel": "5.15.0-1015-xilinx-zynqmp"
+  },
+  "bitstream": {
+    "file": "fpga/up_proj_gemm/impl_1/up_proj_wrapper.bit.bin",
+    "sha256": "9aadb085e1105db46b3c529119fbddfabe10a1a579dc029ccc6f8c9fade1a6c9",
+    "bytes": 19321332,
+    "gemm_version": "0x00020000",
+    "fpga_manager_state": "operating"
+  },
+  "weights": {
+    "source_dir": "/opt/fara/models",
+    "resident_phys_hex": "0x002A200000",
+    "size_bytes": 10485760,
+    "layout": { "W": 0, "b": 9437184, "cfg": 9449472 },
+    "sha256": {
+      "W": "2b81d7d2b1c7624157d82613df2e4663ea972334301a7d79665ed16ae68c71fd",
+      "b": "d71a74a230d32edd0a3e2562ba65a4cbc8ca1d1ff918a5f53468b0d096ad0086",
+      "cfg": "33d75d774041a248e0e64396c2826a3f9c819f7fe65f487741aef38d4219ca32"
+    },
+    "readback_verified": true
+  },
+  "boot_autoload": {
+    "unit": "fara-bitstream.service + fara-weights.service",
+    "enabled": true,
+    "active": true,
+    "verified_after_reboot": true,
+    "units": [
+      {
+        "unit": "fara-bitstream.service",
+        "role": "PL 比特流全量配置（flags=0）",
+        "enabled": true,
+        "active": true,
+        "verified_after_reboot": true,
+        "note": "冷启动实测：开机自动配置 PL，state=operating、VERSION=0x00020000（日志 [fara-bit] PL 配置完成）"
+      },
+      {
+        "unit": "fara-weights.service",
+        "role": "权重常驻 DMA 缓冲",
+        "enabled": true,
+        "active": true,
+        "verified_after_reboot": true,
+        "note": "冷启动实测：开机即分配 dma_heap 并常驻持有，物理地址见 /run/fara-resident.json（本次 0x002A200000，pid 859）"
+      }
+    ],
+    "note": "冷启动（systemctl reboot）实测：PL 自动配置 + 权重自动常驻，两单元均 active；重启后复跑板卡端到端仍 BIT-EXACT / E2E PASS。此前只有权重自加载、没有比特流自加载（fpga_manager 冷启动后为 unknown），本轮新增 fara-bitstream.service 补齐，形成「先配 PL、再搬权重」的冷启动即就绪链路。注意：fara_infer_server 为按需启动的验证/调试服务（非开机单元）。"
+  },
+  "levels": [
+    {
+      "id": "L2",
+      "name": "AXI-Lite 寄存器（含 FaRMap）",
+      "status": "pass",
+      "detail": "VERSION=0x00020000 · M_ROWS=0x10 · N_TILES=0xC0 · 未映射偏移=0xDEADBEEF · FaRMap 8 项可读写（FAR_A[0]=0x2FF，FAR_INV[0]=0x3F000000）"
+    },
+    {
+      "id": "L3",
+      "name": "DMA 端到端 vs Python golden",
+      "status": "pass",
+      "detail": "3072/3072 输出逐 bit 一致 · IN_WORDS=2363136 · OUT_WORDS=3072 · TILE_IDX=191 · 25.8 ms"
+    },
+    {
+      "id": "L4",
+      "name": "硬件 FaR vs 软件 FaR",
+      "status": "pass",
+      "detail": "基线 vs Y_shadow 与 FaR vs Y_far 均 BIT-EXACT · FAR_HITS=16 · FAR_PHASE=0 · 额外时间 +18.1 µs（0.07%）"
+    },
+    {
+      "id": "L5",
+      "name": "端到端 GPT-2 offload（板卡）",
+      "status": "pass",
+      "detail": "h.0.mlp.c_fc 走板卡 · 层输出与最终 logits 对硬件口径参考 BIT-EXACT（max|Δ|=0）· top-1 一致 100% · 生成文本一致 · 10 次板卡调用"
+    }
+  ],
+  "e2e": {
+    "name": "端到端 GPT-2 offload（板卡）",
+    "as_of": "2026-10-08 21:45:57",
+    "layer": "transformer.h.0.mlp.c_fc",
+    "backend": "board",
+    "host": "192.168.1.200:9000",
+    "prompt": "Field programmable gate arrays offer",
+    "n_tokens": 6,
+    "far": { "div": 2, "n_entries": 8 },
+    "layer_bit_exact": true,
+    "logits_bit_exact": true,
+    "max_abs": 0.0,
+    "top1_agree_pct": 100.0,
+    "kl_clean_offload": 0.0006624497473239899,
+    "generate_match": true,
+    "generate_text": "Field programmable gate arrays offer a wide range of applications, including:",
+    "timing_ms": { "clean": 36.14, "offload": 127.74, "ref": 252.52 },
+    "calls": 10,
+    "verdict": "PASS"
+  },
+  "far_map": { "entries": 8, "expected_hits": 16 },
+  "conservation": {
+    "max_abs_err": 0.263045072555542,
+    "rel_err": 0.048766032079850884,
+    "note": "守恒为软件 golden 口径；硬件已与 golden bit-exact，故同口径成立"
+  },
+  "source_logs": [
+    "fpga/up_proj_gemm/board_test/run_far_board.log",
+    "fpga/up_proj_gemm/board_test/fara-weights-verify_board.log",
+    "e2e_verify.json"
+  ]
+}

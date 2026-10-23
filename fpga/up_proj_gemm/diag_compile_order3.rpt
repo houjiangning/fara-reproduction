@@ -1,0 +1,14 @@
+Source compile order for 'synthesis' with fileset 'sources_1' in source management mode 'All':
+Index  File Name        Used_In  File_Type  Library         Ngc Wrapper  Full Path Name
+-----  ---------------  -------  ---------  --------------  -----------  -------------------------------------------------------------------------------------------------------------------------------------------------------------
+1      fp32_mul_ip.dcp  Synth    DCP        xil_defaultlib               c:/Users/houji/Desktop/doc/study/llm-fpga-security-literature/fara-reproduction/fpga/up_proj_gemm/up_proj_gemm.gen/sources_1/ip/fp32_mul_ip_4/fp32_mul_ip.dcp
+2      fp32_add_ip.dcp  Synth    DCP        xil_defaultlib               c:/Users/houji/Desktop/doc/study/llm-fpga-security-literature/fara-reproduction/fpga/up_proj_gemm/up_proj_gemm.gen/sources_1/ip/fp32_add_ip_4/fp32_add_ip.dcp
+3      up_proj.v        Synth    Verilog    xil_defaultlib  No           c:/Users/houji/Desktop/doc/study/llm-fpga-security-literature/fara-reproduction/fpga/up_proj_gemm/up_proj_gemm.gen/sources_1/bd/up_proj/synth/up_proj.v
+
+
+Missing instances for 'synthesis' with fileset 'sources_1':
+Index  Instance Path  File Path  Line
+-----  -------------  ---------  ----
+< empty >
+
+

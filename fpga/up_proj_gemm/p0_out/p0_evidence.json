@@ -1,0 +1,125 @@
+{
+  "as_of": "2026-10-12",
+  "phase": "P0",
+  "title": "AES-256-CTR RTL 与仿真验证证据（PUF 方案 B 第 0 阶段）",
+  "note": "本文件为 P0 阶段新增产物，不改动任何既有成果。既有 evidence（hw_verify.json / hw_compare.json / threshold_metric_recheck.json）保持原样。",
+
+  "testbench": {
+    "name": "tb_aes_ctr",
+    "runner": "tools/run_sim.ps1 -Only aes",
+    "test1": {
+      "name": "aes256_core 直连 NIST KAT",
+      "vectors": "sim/aes_kat.mem",
+      "source": "NIST SP 800-38A F.5.5 AES-256-CTR",
+      "blocks_checked": 4,
+      "result": "PASS (4/4)"
+    },
+    "test2": {
+      "name": "aes256_ctr 流式端到端 + 输出随机反压",
+      "vectors": "sim/aes_vectors.mem",
+      "n_blocks": 64,
+      "n_beats": 128,
+      "backpressure": "输出侧 LFSR 伪随机 m_tready",
+      "st_blk_cnt": 64,
+      "tlast_position_ok": true,
+      "result": "PASS (64/64 bit-exact)"
+    },
+    "summary": "=== PASS ===  68 项通过，0 项失败"
+  },
+
+  "python_golden": {
+    "file": "tools/gen_aes_vectors.py",
+    "self_check": "NIST SP 800-38A F.5.5 PASS (4/4)",
+    "note": "纯 Python、零依赖，作为 RTL 的 golden 参考模型；S-box 由程序生成并锚点自检 (0x00->0x63, 0x01->0x7C, 0x53->0xED)"
+  },
+
+  "weight_tool": {
+    "file": "tools/weight_encrypt.py",
+    "input": "board_export/board_W_transformer_h_0_mlp_c_fc.bin",
+    "input_bytes": 9437184,
+    "test_key_hex_first16": "0001020304050607",
+    "test_nonce_hex": "a0a1a2a3a4a5a6a7a8a9aaab",
+    "ctr_init": 0,
+    "sha256_input": "2b81d7d2b1c7624157d82613df2e4663ea972334301a7d79665ed16ae68c71fd",
+    "sha256_output": "248dc25212bcda4acb287a5079df46196e39eb3c2c5cdc0a3c903be59bb80112",
+    "output_bytes": 9437184,
+    "roundtrip_sha256": "2b81d7d2b1c7624157d82613df2e4663ea972334301a7d79665ed16ae68c71fd",
+    "roundtrip_ok": true,
+    "backend": "pycryptodome AES-CTR",
+    "crosscheck_vs_python_ref": "OK (前 64 块逐字节一致)",
+    "throughput_mbps": 226.4,
+    "note": "sha256_input 与既有 hw_verify.json 中记录的 W 哈希 2b81d7d2... 一致，说明用的是同一份权重"
+  },
+
+  "rtl_files_added": [
+    "rtl/aes256_sbox.sv",
+    "rtl/aes256_core.sv",
+    "rtl/aes256_ctr.sv"
+  ],
+  "sim_files_added": ["sim/tb_aes_ctr.sv"],
+  "tool_files_added": [
+    "tools/gen_aes_vectors.py",
+    "tools/weight_encrypt.py"
+  ],
+  "tool_files_modified": [
+    "tools/run_sim.ps1  (仅新增 -Only aes 分支，GEMM 流程未动)"
+  ],
+  "existing_files_untouched": true,
+
+  "interface_contract": {
+    "block_byte_order": "块字节 j 位于 blk[8*j +: 8]  <=>  int.from_bytes(block_bytes, 'little')",
+    "ctr_counter_block": "[ nonce(12B) | ctr 大端(4B) ]",
+    "stream_mapping": "每 2 个 64-bit beat 组成 1 个块，第一拍为低 64 位",
+    "aes_latency_cycles": 15,
+    "aes_throughput": "1 block/cycle (peaked) ; 实测需求 0.5 block/cycle @100MHz"
+  },
+
+  "bugs_found_and_fixed_in_p0": [
+    {
+      "id": "B1",
+      "symptom": "xelab EXCEPTION_ACCESS_VIOLATION，aes256_core 单独也崩",
+      "cause": "S-box 写成模块内 256 项 case 的 function，被内联 228 次，elaborator 表达式树规模爆炸",
+      "fix": "拆成独立模块 aes256_sbox（ROM + 实例化），244 个实例共享一份表体"
+    },
+    {
+      "id": "B2",
+      "symptom": "stage0 多做了 SubBytes/ShiftRows/MixColumns",
+      "cause": "初始轮应是纯 AddRoundKey",
+      "fix": "gs==0 时 c0..c3 直接取 st_in，不走查表/移位/列混合"
+    },
+    {
+      "id": "B3",
+      "symptom": "密钥扩展从 w[8] 起全部偏离（w[8] 期望 9ba35411 实得 9aa35410）",
+      "cause": "Rcon 写成 {24'd0, rcon}（低字节），FIPS-197 要求异或到最高字节 0x01000000",
+      "fix": "改为 rcon_word() 返回 32'h0100_0000 等形式"
+    },
+    {
+      "id": "B4",
+      "symptom": "每个块全盘不一致；AddRoundKey 一项错",
+      "cause": "行 0 取了轮密钥字的最低字节 [7:0]，FIPS 要求取最高字节 [31:24]",
+      "fix": "行 r 依次取 [31:24] / [23:16] / [15:8] / [7:0]"
+    },
+    {
+      "id": "B5",
+      "symptom": "流出 87 个块（应 64），输出错位",
+      "cause": "TB 激励源最后一拍被重复呈现（initial 与 always 同时写 src_idx 也导致 X）",
+      "fix": "用前瞻索引 nxt 驱动，且 src_idx 由 always 独占"
+    },
+    {
+      "id": "B6",
+      "symptom": "流出 141 拍（应 128），tlast 丢失",
+      "cause": "ce 门控使 ks_vld 持续多周期，同块被重复推入 FIFO；且输入结束后流水线不排空",
+      "fix": "ce 固定为 1，靠固定 15 拍延迟对齐 dpipe 与密钥流"
+    }
+  ],
+
+  "next_phase": {
+    "id": "P1",
+    "goal": "PL 自建 Butterfly PUF 阵列 + 稳定性测量",
+    "key_exit_criteria": [
+      "综合后 get_cells -hier -filter {NAME =~ *u_bpuf*} 非空（未被优化掉）",
+      "拿到跨上电逐位翻转率曲线（>=32 次）",
+      "跨重综合响应可复现（验证 Pblock/LOC 锁定有效）"
+    ]
+  }
+}

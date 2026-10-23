@@ -1,0 +1,46 @@
+{
+  "as_of": "2026-10-08 21:58:19",
+  "layer": "transformer.h.0.mlp.c_fc",
+  "backend": "board",
+  "host": "192.168.1.200",
+  "port": 9000,
+  "prompt": "Field programmable gate arrays offer",
+  "n_tokens": 6,
+  "n_max": 32,
+  "far": {
+    "div": 2,
+    "n_entries": 8
+  },
+  "timing_ms": {
+    "clean": 42.37174987792969,
+    "offload": 125.03623962402344,
+    "ref": 252.80117988586426
+  },
+  "layer_check": {
+    "bit_exact": true,
+    "max_abs": 0.0
+  },
+  "logits_check": {
+    "bit_exact": true,
+    "max_abs": 0.0
+  },
+  "fidelity": {
+    "max_abs_logit_delta": 0.83148193359375,
+    "mean_abs_logit_delta": 0.349793016910553,
+    "top1_agree_pct": 100.0,
+    "kl_clean_offload": 0.0006624497473239899
+  },
+  "generate": {
+    "clean": "Field programmable gate arrays offer a wide range of applications, including:",
+    "offload": "Field programmable gate arrays offer a wide range of applications, including:",
+    "ref": "Field programmable gate arrays offer a wide range of applications, including:"
+  },
+  "generate_match": true,
+  "verdict": {
+    "plumbing": true,
+    "fidelity": true,
+    "generation": true,
+    "e2e_pass": true
+  },
+  "calls": 10
+}

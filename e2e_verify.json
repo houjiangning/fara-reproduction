@@ -1,0 +1,46 @@
+{
+  "as_of": "2026-10-22 19:44:52",
+  "layer": "transformer.h.0.mlp.c_fc",
+  "backend": "board",
+  "host": "192.168.1.200",
+  "port": 9000,
+  "prompt": "FPGA security",
+  "n_tokens": 3,
+  "n_max": 32,
+  "far": {
+    "div": 2,
+    "n_entries": 8
+  },
+  "timing_ms": {
+    "clean": 95.65591812133789,
+    "offload": 130.65838813781738,
+    "ref": 178.694486618042
+  },
+  "layer_check": {
+    "bit_exact": true,
+    "max_abs": 0.0
+  },
+  "logits_check": {
+    "bit_exact": true,
+    "max_abs": 0.0
+  },
+  "fidelity": {
+    "max_abs_logit_delta": 0.6200714111328125,
+    "mean_abs_logit_delta": 0.23786011338233948,
+    "top1_agree_pct": 100.0,
+    "kl_clean_offload": 0.0011779138585552573
+  },
+  "generate": {
+    "clean": "FPGA security.\n\nThe company has been working",
+    "offload": "FPGA security.\n\nThe company has been working",
+    "ref": "FPGA security.\n\nThe company has been working"
+  },
+  "generate_match": true,
+  "verdict": {
+    "plumbing": true,
+    "fidelity": true,
+    "generation": true,
+    "e2e_pass": true
+  },
+  "calls": 10
+}

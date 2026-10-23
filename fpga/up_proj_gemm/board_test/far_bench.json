@@ -1,0 +1,28 @@
+{
+  "layer": "transformer.h.0.mlp.c_fc",
+  "div": 2,
+  "n_far": 8,
+  "n_tokens": 1,
+  "K": 768,
+  "M_TOTAL": 3072,
+  "M_TILE": 16,
+  "G": 8,
+  "N_IN": 2363136,
+  "N_OUT": 3072,
+  "n_hits": 16,
+  "activation_source": "model:transformer.h.0.mlp.c_fc",
+  "have_original_W": true,
+  "conservation": {
+    "max_abs_err": 0.263045072555542,
+    "rel_err": 0.048766032079850884,
+    "note": "dead 通道是真实激活，守恒误差取决于其活跃度"
+  },
+  "sw_timing_s": {
+    "base_linear": 0.00011771799996495247,
+    "far_forward": 0.0005785639997338876,
+    "far_overhead": 0.00046084599976893516,
+    "reps": 50
+  },
+  "bin_file": "fpga/up_proj_gemm/board_test/far_bench.bin",
+  "fmap_file": "fpga/up_proj_gemm/board_test/far_bench.fmap"
+}

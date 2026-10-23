@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ZCU106 · up_proj GEMM 烧录与验证指南</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --card:#ffffff; --ink:#1c2024; --ink2:#4a5259; --ink3:#7b858d;
+    --line:#e3e6ea; --accent:#0b6bcb; --accent-soft:#e8f1fb;
+    --warn:#b26a00; --warn-soft:#fff6e6;
+    --danger:#c0392b; --danger-soft:#fdecea;
+    --ok:#1a7f4b; --ok-soft:#e7f6ee;
+    --code-bg:#1e242b; --code-ink:#e6edf3;
+    --mono:"Cascadia Mono","Consolas","SFMono-Regular",Menlo,monospace;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:"Segoe UI","Microsoft YaHei",system-ui,-apple-system,sans-serif;
+    line-height:1.7; font-size:15px;
+  }
+  .wrap{max-width:980px;margin:0 auto;padding:40px 28px 90px}
+  header.hero{
+    background:linear-gradient(135deg,#0b3c6e 0%,#0b6bcb 60%,#1591d8 100%);
+    color:#fff;border-radius:14px;padding:30px 32px;margin-bottom:26px;
+    box-shadow:0 8px 26px rgba(11,60,110,.22);
+  }
+  header.hero h1{margin:0 0 8px;font-size:25px;letter-spacing:.3px}
+  header.hero p{margin:0;opacity:.9;font-size:13.5px}
+  header.hero .meta{margin-top:14px;font-size:12.5px;opacity:.82;font-family:var(--mono)}
+  h2{
+    font-size:20px;margin:44px 0 14px;padding-bottom:9px;
+    border-bottom:2px solid var(--line);
+  }
+  h2 .n{
+    display:inline-block;background:var(--accent);color:#fff;border-radius:7px;
+    font-size:13px;padding:2px 9px;margin-right:10px;vertical-align:2px;
+  }
+  h3{font-size:16.5px;margin:26px 0 10px;color:#0b3c6e}
+  h4{font-size:14.5px;margin:18px 0 8px;color:var(--ink2)}
+  p{margin:9px 0}
+  ul,ol{margin:9px 0;padding-left:24px}
+  li{margin:5px 0}
+  code{
+    font-family:var(--mono);font-size:12.8px;background:#eef1f4;
+    padding:1.5px 5px;border-radius:4px;color:#b02a5b;
+  }
+  pre{
+    background:var(--code-bg);color:var(--code-ink);padding:15px 17px;border-radius:9px;
+    overflow-x:auto;font-family:var(--mono);font-size:12.7px;line-height:1.62;
+    margin:11px 0;border:1px solid #2c353f;
+  }
+  pre code{background:none;color:inherit;padding:0;font-size:inherit}
+  pre .c{color:#7d8b99}
+  pre .k{color:#79c0ff}
+  pre .s{color:#a5d6a7}
+  table{
+    width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px;
+    background:var(--card);border-radius:9px;overflow:hidden;
+    box-shadow:0 1px 3px rgba(20,30,40,.07);
+  }
+  th,td{padding:9px 12px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
+  th{background:#f0f3f6;font-weight:600;color:#0b3c6e;font-size:13px}
+  tr:last-child td{border-bottom:none}
+  .card{
+    background:var(--card);border:1px solid var(--line);border-radius:11px;
+    padding:18px 20px;margin:16px 0;box-shadow:0 1px 3px rgba(20,30,40,.05);
+  }
+  .callout{border-radius:10px;padding:13px 16px;margin:14px 0;font-size:13.8px;border-left:4px solid}
+  .callout .t{font-weight:700;display:block;margin-bottom:3px;font-size:13.5px}
+  .warn{background:var(--warn-soft);border-color:var(--warn);color:#6b4200}
+  .danger{background:var(--danger-soft);border-color:var(--danger);color:#7d2a20}
+  .ok{background:var(--ok-soft);border-color:var(--ok);color:#135c37}
+  .info{background:var(--accent-soft);border-color:var(--accent);color:#0b3c6e}
+  .badge{
+    display:inline-block;font-size:11.5px;font-weight:700;border-radius:5px;
+    padding:1.5px 7px;margin-right:6px;vertical-align:1.5px;letter-spacing:.3px;
+  }
+  .b-must{background:#fdecea;color:#a5281b}
+  .b-opt{background:#eef1f4;color:#5b656e}
+  .b-new{background:#e7f6ee;color:#135c37}
+  .step{
+    background:var(--card);border:1px solid var(--line);border-left:4px solid var(--accent);
+    border-radius:9px;padding:15px 18px;margin:13px 0;
+  }
+  .step .h{font-weight:700;color:#0b3c6e;font-size:14.5px;margin-bottom:6px}
+  .chk{list-style:none;padding-left:2px}
+  .chk li{position:relative;padding-left:26px;margin:7px 0}
+  .chk li::before{
+    content:"";position:absolute;left:0;top:6px;width:14px;height:14px;
+    border:2px solid #b8c2cc;border-radius:4px;
+  }
+  .path{display:flex;gap:10px;flex-wrap:wrap;margin:12px 0}
+  .pill{
+    background:#eef1f4;border-radius:20px;padding:5px 14px;font-size:13px;
+    font-family:var(--mono);color:#3b444c;border:1px solid #dde2e8;
+  }
+  .pill b{color:var(--accent)}
+  footer{margin-top:56px;padding-top:18px;border-top:1px solid var(--line);
+    color:var(--ink3);font-size:12.5px;text-align:center}
+  .toc{background:var(--card);border:1px solid var(--line);border-radius:11px;padding:16px 22px;margin:18px 0}
+  .toc ol{margin:6px 0;padding-left:22px}
+  .toc a{color:var(--accent);text-decoration:none}
+  .toc a:hover{text-decoration:underline}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <h1>ZCU106 · up_proj GEMM 烧录与验证指南</h1>
+  <p>GPT-2-small <code style="background:rgba(255,255,255,.16);color:#fff">h.0.mlp.c_fc</code> 硬件加速器 —— 从比特流生成到板级 bit-exact 验证</p>
+  <div class="meta">Vivado 2022.2 · xczu7ev-ffvc1156-2-e · ZCU106 (EK-U1-ZCU106-G) · Ubuntu 22.04 LTS</div>
+</header>
+
+<div class="toc">
+  <strong>目录</strong>
+  <ol>
+    <li><a href="#s0">核对：当前真实状态</a></li>
+    <li><a href="#sA">Part A —— 生成含 GEMM 的新比特流</a></li>
+    <li><a href="#sB">Part B —— 烧录到板卡（三条路径）</a></li>
+    <li><a href="#sC">Part C —— 验证方法（逐层判据）</a></li>
+    <li><a href="#sD">Part D —— 排障对照表</a></li>
+  </ol>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="s0"><span class="n">0</span>核对：当前真实状态</h2>
+
+<p>先对齐事实，避免拿着旧文件去烧。下表是 2026-10-01 对工程目录的实际检查结果。</p>
+
+<table>
+  <tr><th style="width:26%">项目</th><th>实际状态</th></tr>
+  <tr>
+    <td>RTL 仿真</td>
+    <td><span class="badge b-new">已完成</span>4 组正向用例 PASS；反向用例（G=4，违反 G≥ADD_LAT+1）FAIL —— 说明 TB 对流水线 RAW 缺陷敏感，可信。</td>
+  </tr>
+  <tr>
+    <td>Block Design</td>
+    <td><span class="badge b-must">未完成</span>仍是旧版：<code>axis_data_fifo_0</code> 自环，<strong>GEMM 尚未接入</strong>。</td>
+  </tr>
+  <tr>
+    <td>现有比特流</td>
+    <td><span class="badge b-must">已过期</span><code>up_proj_wrapper.bit</code>（09-30 00:04）/ <code>.bit.bin</code>（09-30 00:14）都是<strong>回环版，不含 GEMM</strong>，不能用于本次验证。</td>
+  </tr>
+  <tr>
+    <td>XSA</td>
+    <td><span class="badge b-must">已过期</span><code>up_proj_wrapper.xsa</code>（09-30 00:08），同样是回环版。</td>
+  </tr>
+  <tr>
+    <td>地址映射</td>
+    <td><code>axi_dma_0/S_AXI_LITE</code> = <code>0xA0000000</code> / 64K；GEMM 计划 <code>0xA0010000</code> / 64K。</td>
+  </tr>
+  <tr>
+    <td>PS 配置</td>
+    <td><code>M_AXI_HPM0_FPD</code>=1、<code>M_AXI_HPM1_FPD</code>=1、<code>S_AXI_HP0_FPD</code>=1、<code>pl_clk0</code> = 100 MHz、<code>PSU__FPGA_PL0_ENABLE</code>=1。</td>
+  </tr>
+  <tr>
+    <td>时钟 / 复位</td>
+    <td>全设计单时钟域 <code>pl_clk0</code>；<code>pl_resetn0 → rst_ps8_0_99M → peripheral_aresetn</code>。</td>
+  </tr>
+  <tr>
+    <td>板卡</td>
+    <td>已能 SD 启动 Ubuntu 22.04；SSH 未配置；UART = J83 / 115200 8N1（CP210x）。</td>
+  </tr>
+</table>
+
+<div class="callout danger">
+  <span class="t">结论</span>
+  必须先做完 <strong>Part A</strong>（把 GEMM 接进 BD 并重新出比特流），Part B / Part C 才有意义。直接拿 09-30 的 <code>.bit.bin</code> 去烧，PL 里只有一条 AXI-Stream 回环，<code>0xA0010000</code> 处什么都没有。
+</div>
+
+<!-- ============================================================ -->
+<h2 id="sA"><span class="n">A</span>生成含 GEMM 的新比特流</h2>
+
+<h3>A1　把 GEMM 接进 Block Design</h3>
+
+<p>Vivado 现在正开着 <code>up_proj_gemm.xpr</code>（GUI 模式），<strong>不要</strong>再开一个 batch 实例抢工程。直接在当前 Vivado 的 <strong>Tcl Console</strong> 里执行：</p>
+
+<pre><code><span class="k">source</span> C:/Users/houji/Desktop/doc/study/llm-fpga-security-literature/fara-reproduction/fpga/up_proj_gemm/tools/add_gemm_to_bd.tcl</code></pre>
+
+<p>脚本 <code>tools/add_gemm_to_bd.tcl</code> 已改成<strong>两用</strong>：GUI 里 <code>source</code> 会复用已打开的工程且不关闭它；<code>vivado -mode batch</code> 下会自动开/关工程。它依次完成：</p>
+
+<ol>
+  <li>生成 <code>fp32_mul_ip</code>（C_Latency=8）与 <code>fp32_add_ip</code>（C_Latency=4），并<strong>校验 IP 延迟 == RTL 参数</strong>，不一致直接报错退出（防止流水线错位）。</li>
+  <li>把 6 个 RTL 文件加入 <code>sources_1</code>：<code>gemm_up_proj_core.sv</code> / <code>gemm_up_proj_axi_lite.sv</code> / <code>gemm_up_proj_top.sv</code> / <code>gemm_up_proj_bd.v</code> / <code>fp32_mul.sv</code> / <code>fp32_add.sv</code>。</li>
+  <li>删除 <code>axis_data_fifo_0</code>（旧自环）。</li>
+  <li>新建 <code>gemm_up_proj_bd_0</code>（用 Verilog shim，因为 Vivado 2022.2 不允许 BD 直接引用 SystemVerilog 顶层模块）。</li>
+  <li>连线：
+    <ul>
+      <li><code>axi_dma_0/M_AXIS_MM2S</code> → <code>gemm_up_proj_bd_0/s_axis</code></li>
+      <li><code>gemm_up_proj_bd_0/m_axis</code> → <code>axi_dma_0/S_AXIS_S2MM</code></li>
+      <li><code>smartconnect_0/M01_AXI</code> → <code>gemm_up_proj_bd_0/s_axi</code>（<code>smartconnect_0</code> NUM_MI 由 1 改为 2）</li>
+      <li><code>pl_clk0</code> → <code>s_axi_aclk</code>；<code>peripheral_aresetn</code> → <code>s_axi_aresetn</code></li>
+      <li>顺带补上原本悬空的 <code>smartconnect_1/aresetn</code></li>
+    </ul>
+  </li>
+  <li>地址分配 <code>0xA0010000</code> / 64K。</li>
+  <li><code>validate_bd_design</code> + <code>save_bd_design</code>。</li>
+</ol>
+
+<div class="callout ok">
+  <span class="t">成功标志</span>
+  Tcl Console 最后应打印 <code>== ADD_GEMM_DONE</code>，并且能看到
+  <code>== FP_IP_LATENCY mul=8 (want 8)&nbsp; add=4 (want 4)</code> 和
+  <code>== MAP ... offset=0x00A0010000 range=64K</code>。
+</div>
+
+<div class="callout info">
+  <span class="t">不想用 Tcl 也可以手工做</span>
+  ① 选中 <code>axis_data_fifo_0</code> 按 Delete；② 右键空白处 → <em>Add Module…</em> 选 <code>gemm_up_proj_bd</code>；③ 按上面 5 条连线；④ 打开 <em>Address Editor</em> 给 <code>gemm_up_proj_bd_0/S_AXI</code> 填 <code>0xA0010000</code> / 64K；⑤ 按 F6 或点 <em>Validate Design</em>。
+</div>
+
+<h3>A2　目视核对 BD</h3>
+
+<p>打开 Block Design，应看到如下拓扑（与旧版的唯一区别是 FIFO 换成了 GEMM）：</p>
+
+<pre><code>                 ┌──────────────────┐
+   M_AXI_HPM0_FPD│                  │M00_AXI──► axi_dma_0/S_AXI_LITE   @0xA0000000
+  ──────────────►│  smartconnect_0  │
+   M_AXI_HPM1_FPD│                  │M01_AXI──► gemm_up_proj_bd_0/s_axi @0xA0010000
+  ──────────────►│                  │
+                 └──────────────────┘
+
+   axi_dma_0/M_AXIS_MM2S ──► gemm_up_proj_bd_0/s_axis
+   gemm_up_proj_bd_0/m_axis ──► axi_dma_0/S_AXIS_S2MM
+   axi_dma_0/M_AXI_MM2S,S2MM ──► smartconnect_1 ──► zynq/S_AXI_HP0_FPD ──► DDR
+
+   时钟：pl_clk0 (100MHz) 统一驱动全部模块
+   复位：pl_resetn0 → rst_ps8_0_99M → peripheral_aresetn</code></pre>
+
+<p>Address Editor 里 <code>gemm_up_proj_bd_0/S_AXI</code> 应为 <code>0xA0010000</code>、64K，且<strong>没有</strong>黄色未分配段（Unmapped）。</p>
+
+<h3>A3　重新生成比特流</h3>
+
+<p>GUI：在 Sources 面板右键 <code>up_proj_wrapper</code> → <strong>Generate Bitstream</strong>（弹出提示一律选 Yes / Save）。</p>
+<p>或 Tcl：</p>
+
+<pre><code>reset_run synth_1
+launch_runs synth_1 -jobs 8
+wait_on_run synth_1
+launch_runs impl_1 -to_step write_bitstream -jobs 8
+wait_on_run impl_1</code></pre>
+
+<div class="callout warn">
+  <span class="t">三个必须注意的点</span>
+  <ul style="margin:4px 0">
+    <li>新增了 <code>fp32_mul_ip</code> / <code>fp32_add_ip</code> 两个 OOC IP，会多出各自的 synth/impl run；<code>synth_1</code> <strong>必须整条重跑</strong>，不能只重跑 impl。</li>
+    <li>判定完成：<code>get_property STATUS [get_runs impl_1]</code> 必须等于 <code>write_bitstream Complete!</code>。之前踩过的坑就是所有 run 停在 <code>Scripts Generated</code> / PROGRESS 0%（Windows 计算机名含非 ASCII 字符导致 Tcl 崩溃），计算机名已改为纯英文，应不再复现。</li>
+    <li>产物时间戳必须是今天：<code>up_proj_gemm.runs/impl_1/up_proj_wrapper.bit</code>。</li>
+  </ul>
+</div>
+
+<h3>A4　转成 fpga_manager 能吃的 <code>.bit.bin</code></h3>
+
+<p><code>up_proj_gemm.runs/impl_1/up_proj.bif</code> 已存在且内容正确：</p>
+
+<pre><code>all:
+{
+    [destination_device = pl] up_proj_wrapper.bit
+}</code></pre>
+
+<p>在该目录下执行（<code>bootgen</code> 位于 <code>D:\Download\Xilinx_Vivado\Vivado\2022.2\bin\</code>）：</p>
+
+<pre><code><span class="c"># 在 up_proj_gemm.runs/impl_1 目录下执行</span>
+bootgen -image up_proj.bif -arch zynqmp -o up_proj_wrapper.bit.bin -w</code></pre>
+
+<p>产物 <code>up_proj_wrapper.bit.bin</code> 约 19.3 MB（比 <code>.bit</code> 略大，因为文件头被换成了 ZynqMP boot header）。</p>
+
+<div class="callout danger">
+  <span class="t">两种格式不能互换</span>
+  Vivado Hardware Manager（JTAG 下载）吃 <code>.bit</code>；Linux <code>fpga_manager</code> 吃 <code>.bit.bin</code>。<strong>直接把 <code>.bit</code> 改名成 <code>.bit.bin</code> 是最常见的翻车原因</strong>——必须用 bootgen 转换。
+</div>
+
+<h3>A5　<span class="badge b-opt">可选</span>刷新 XSA</h3>
+<p>File → Export → Export Hardware → 勾选 <em>Include bitstream</em> → 覆盖 <code>up_proj_wrapper.xsa</code>。以后建 Vitis 工程或重做 BOOT.BIN 时要用。</p>
+
+<!-- ============================================================ -->
+<h2 id="sB"><span class="n">B</span>烧录到板卡</h2>
+
+<h3>B0　硬件连接</h3>
+
+<table>
+  <tr><th style="width:22%">连接</th><th style="width:22%">位置</th><th>用途 / 备注</th></tr>
+  <tr><td>12V 电源</td><td>板载 DC 输入</td><td>上电前先把 SW6 拨好</td></tr>
+  <tr><td>micro-USB</td><td><strong>J83</strong>（USB-UART）</td><td>串口控制台，115200 8N1。已在用</td></tr>
+  <tr><td>micro-USB</td><td><strong>USB-JTAG 口</strong>（板载 JTAG 电路，另一条 micro-USB）</td><td>Vivado 下载 / Hardware Manager</td></tr>
+  <tr><td>SD 卡</td><td><strong>J100</strong></td><td>Ubuntu 22.04 启动盘</td></tr>
+  <tr><td>网线</td><td>PS 侧 RJ45（GEM3）</td><td>后续 SSH，本阶段可先不接</td></tr>
+</table>
+
+<p>启动模式拨码 <strong>SW6 = 1000</strong>（1=ON，2=OFF，3=OFF，4=OFF）为 SD 启动；<strong>0000</strong> 为 JTAG 启动。</p>
+
+<div class="callout warn">
+  <span class="t">最容易忽略的一条</span>
+  ZynqMP 上 <strong>PL 的比特流里不包含 PS 配置</strong>。下面三样由 <strong>BOOT.BIN 里的 FSBL / psu_init</strong> 决定，跟 bitstream 无关：
+  <ol style="margin:5px 0">
+    <li><code>pl_clk0</code> 是否使能 —— 本设计全部逻辑都靠它，没有时钟 PL 就是死的</li>
+    <li><code>M_AXI_HPM0_FPD</code> 是否使能 —— PS 读写 PL 寄存器（<code>0xA0000000</code> / <code>0xA0010000</code>）的通路</li>
+    <li><code>S_AXI_HP0_FPD</code> 是否使能 —— DMA 访问 DDR 的通路</li>
+  </ol>
+  Xilinx 官方 ZCU106 Ubuntu 镜像的 BOOT.BIN 通常已使能这三项，所以下面 B2 一般能直接跑通。若 <code>dma_probe</code> 读出全 0 或整机挂死，根因就是这里 → 用你的 XSA 重建 BOOT.BIN。
+</div>
+
+<h3>B1　<span class="badge b-new">推荐先做</span>路径一：JTAG 直接烧 PL</h3>
+
+<p>最快证明「PL 设计本身没问题」，绕开 SD / BOOT.BIN / Linux。</p>
+
+<div class="step">
+  <div class="h">步骤</div>
+  <ol>
+    <li>板卡上电，确认 Vivado Hardware Server 已在运行（GUI 打开即已运行）。</li>
+    <li>Vivado 左下 <strong>Open Hardware Manager</strong> → <strong>Open Target</strong> → <strong>Auto Connect</strong>。左侧应出现 <code>xczu7ev_0</code>。</li>
+    <li>右键 <code>xczu7ev_0</code> → <strong>Program Device</strong>。</li>
+    <li>Bitstream 选 <code>up_proj_gemm.runs/impl_1/up_proj_wrapper.bit</code>（<strong>注意是今天新生成的那个</strong>），点 <strong>Program</strong>。</li>
+    <li>进度条走完、日志出现 <code>End of startup status: HIGH</code>，板上 <strong>DONE 指示灯亮</strong>。</li>
+  </ol>
+</div>
+
+<div class="callout info">
+  <span class="t">这条路径的定位</span>
+  它只把 PL 配置进去，<strong>不动 PS</strong>。所以你可以：先用 SD 启动 Ubuntu（让 BOOT.BIN 把 PS 配好、PL 时钟开起来），<em>再用 JTAG 把新 bitstream 覆盖进 PL</em>，然后回到串口跑验证程序 —— 这是 bring-up 阶段最省事的组合。
+</div>
+
+<h3>B2　<span class="badge b-new">目标流程</span>路径二：SD 启动 Ubuntu + fpga_manager 运行时加载</h3>
+
+<p>系统起来后，在串口 / SSH 里执行：</p>
+
+<pre><code><span class="c"># 1) 确认驱动与节点存在</span>
+ls /sys/class/fpga_manager/
+cat /sys/class/fpga_manager/fpga0/state        <span class="c"># 加载前通常为 unknown</span>
+
+<span class="c"># 2) 放进 /lib/firmware</span>
+sudo mkdir -p /lib/firmware
+sudo cp /media/usb/up_proj_wrapper.bit.bin /lib/firmware/
+sync
+
+<span class="c"># 3) 选 full bitstream（flags=0 = 全量配置；置位则是 partial / DPR）</span>
+echo 0 | sudo tee /sys/class/fpga_manager/fpga0/flags
+
+<span class="c"># 4) 触发加载</span>
+echo up_proj_wrapper.bit.bin | sudo tee /sys/class/fpga_manager/fpga0/firmware
+
+<span class="c"># 5) 判定</span>
+cat /sys/class/fpga_manager/fpga0/state        <span class="c"># 期望：operating</span>
+dmesg | tail -20                               <span class="c"># 期望：fpga_manager ... operating</span></code></pre>
+
+<p><code>state</code> 变成 <strong><code>operating</code></strong> 就表示 PL 已配置完成。</p>
+
+<h4>文件怎么进板子（当前还没网）</h4>
+<p><strong>用 U 盘</strong>：FAT32 / exFAT 格式化，插板卡 USB 口，Ubuntu 桌面会自动挂载到 <code>/media/&lt;user&gt;/&lt;label&gt;/</code>。<br>
+串口 <code>rz</code> 传 19 MB 在 115200 下要半小时以上，不要用。等网络通了改用 <code>scp</code>。</p>
+
+<h3>B3　<span class="badge b-opt">可选 · 长期方案</span>路径三：BOOT.BIN 内嵌 bitstream</h3>
+<p>把 bitstream 编进 BOOT.BIN，FSBL 上电即配置 PL，不用每次手动加载。需要 FSBL / PMUFW / ATF / U-Boot 全部与你的 XSA 匹配，属于重建启动镜像，风险和工量都大。<strong>验证阶段先不做</strong>，等 GEMM 打通、进入 W4 端到端阶段再考虑。</p>
+
+<!-- ============================================================ -->
+<h2 id="sC"><span class="n">C</span>验证方法（逐层，失败即停）</h2>
+
+<p>按 L0 → L4 顺序做，每一层失败就先修这一层，不要跳。</p>
+
+<h3>L0　比特流是否真的进了 PL</h3>
+<pre><code>cat /sys/class/fpga_manager/fpga0/state    <span class="c"># operating</span>
+dmesg | grep -i fpga</code></pre>
+<p><strong>判据</strong>：<code>operating</code>。<br>
+<strong>失败</strong>：state 不是 operating → 看 dmesg；最常见原因是把 <code>.bit</code> 直接改名成 <code>.bit.bin</code>（没走 bootgen）。</p>
+
+<h3>L1　AXI-Lite 控制通路（dma_probe）</h3>
+<pre><code>cd /home/ubuntu/board_test
+gcc -O2 -o dma_probe dma_probe.c
+sudo ./dma_probe</code></pre>
+<p><strong>判据</strong>：</p>
+<ul>
+  <li>复位后 <code>MM2S_DMASR</code>：<code>Halted=1 Idle=1</code></li>
+  <li>写 <code>MM2S_DMACR.RS=1</code> 后 <code>Halted</code> 变为 <code>0</code></li>
+  <li>脚本打印 <code>&gt;&gt;&gt; 通过：AXI-Lite 控制通路可用。</code></li>
+</ul>
+<p><strong>这一步同时证明三件事</strong>：bitstream 已生效、<code>pl_clk0</code> 在跑、<code>M_AXI_HPM0_FPD</code> 已使能。（脚本里的基址 <code>0xA0000000</code> 与 BD 中 <code>axi_dma_0/S_AXI_LITE</code> 一致。）</p>
+
+<h3>L2　GEMM 自己的寄存器读写</h3>
+<p>仿照 <code>dma_probe.c</code> 写一个 20 行的小程序，mmap <code>0xA0010000</code>：</p>
+<pre><code>VERSION  (0x18)  读 → 应等于 RTL 里写死的版本号
+K_COLS   (0x0C)  写 768  → 读回 768
+N_TOKENS (0x10)  写 4    → 读回 4
+STATUS   (0x04)  读 → busy=0</code></pre>
+<p><strong>判据</strong>：读回值与写入值一致。这一步单独验证 GEMM 的 AXI-Lite 从机已经活了 —— 把「GEMM 没接上」和「DMA 没通」两类故障分开定位。</p>
+
+<h3>L3　DMA 数据通路 + GEMM 功能 bit-exact</h3>
+<p>这是核心验证。需要一块<strong>物理连续</strong>的 DMA 缓冲区，推荐两条路：</p>
+<table>
+  <tr><th style="width:24%">方案</th><th>说明</th></tr>
+  <tr>
+    <td><strong>dma-proxy</strong>（Xilinx 官方）</td>
+    <td>提供 <code>/dev/dma_proxy_tx</code> / <code>/dev/dma_proxy_rx</code>，用户态 mmap 缓冲区即可。需要编译内核模块：<code>sudo apt install build-essential linux-headers-$(uname -r)</code>，并按你的内核调整 <code>dma-proxy.h</code> 与设备树节点。</td>
+  </tr>
+  <tr>
+    <td><strong>udmabuf</strong>（更轻）</td>
+    <td>加载 <code>udmabuf.ko</code> 后得到 <code>/dev/udmabuf0</code>，已知物理地址，用户态 mmap 后用 <code>/dev/mem</code> 直接写 DMA 寄存器（复用 dma_probe 的套路），<strong>不用写内核模块</strong>。</td>
+  </tr>
+</table>
+
+<p>用户态测试程序的流程：</p>
+<ol>
+  <li>分配 tx / rx 缓冲（<strong>4 KB 对齐</strong>）。</li>
+  <li>按 RTL 约定把 <code>[X | b | W]</code> 排成 64-bit AXI-Stream 流（注意 <code>tlast</code> 边界）。</li>
+  <li>写 <code>K_COLS</code> / <code>N_TOKENS</code> / <code>M_ROWS</code>，写 <code>CTRL</code> 启动。</li>
+  <li>MM2S 发数据 → GEMM 运算 → S2MM 收结果。</li>
+  <li>与 <code>tools/gen_golden_vectors.py</code> 生成的 golden <strong>逐 bit 比对</strong>。</li>
+</ol>
+
+<div class="callout ok">
+  <span class="t">判据</span>
+  与 golden <strong>逐位一致（bit-exact）</strong>；若最终采用放宽误差界的方案，则误差必须落在事先书面约定的界内。测试权重可用 <code>board_export/board_W_transformer_h_0_mlp_c_fc.bin</code>（9,437,184 B）与 <code>board_b_*.bin</code>（12,288 B）。
+</div>
+
+<h3>L4　端到端</h3>
+<p>PC ↔ PS ↔ PL 全链路：PC 下发激活 → PS 转发 → PL 算 GEMM → 回传 → 与 torch <code>h.0.mlp.c_fc</code> 的结果比对。这一层属于 W2/W4 的通路联调，等 L3 过了再做。</p>
+
+<!-- ============================================================ -->
+<h2 id="sD"><span class="n">D</span>排障对照表</h2>
+
+<table>
+  <tr><th style="width:34%">现象</th><th style="width:30%">最可能原因</th><th>处理</th></tr>
+  <tr>
+    <td><code>fpga_manager/state</code> 一直 <code>unknown</code></td>
+    <td>没写 <code>firmware</code> 节点；或 <code>.bit.bin</code> 格式错</td>
+    <td>确认用 bootgen 转的 <code>.bit.bin</code>；<code>dmesg</code> 看 fpga 报错</td>
+  </tr>
+  <tr>
+    <td><code>dma_probe</code> 读寄存器<strong>全 0</strong></td>
+    <td>BOOT.BIN 未使能 <code>M_AXI_HPM0_FPD</code>，或 PL 无时钟</td>
+    <td>查 BOOT.BIN 的 psu_init；必要时用 XSA 重建 BOOT.BIN</td>
+  </tr>
+  <tr>
+    <td>读寄存器时<strong>整机挂死</strong></td>
+    <td>AXI 访问打到未使能的 PS 端口</td>
+    <td>同上。先用 L2 的 GEMM 寄存器测试确认是哪一段地址不通</td>
+  </tr>
+  <tr>
+    <td>DMA 不搬数，<code>DMASR</code> 报 Internal Error</td>
+    <td>buffer 未 4 KB 对齐 / Buffer Length Register 位宽不足 / 未处理 cache 一致性</td>
+    <td>Simple 模式 buffer 4 KB 对齐；用 CMA 或非缓存内存；Buffer Length Register ≥ 23 bit</td>
+  </tr>
+  <tr>
+    <td>GEMM 结果错但不挂死</td>
+    <td>流水线 G 约束、累加顺序、<code>tlast</code> 语义</td>
+    <td>回仿真对 golden；确认 <code>G ≥ ADD_LAT+1</code></td>
+  </tr>
+  <tr>
+    <td>只有第一拍对、后面全错</td>
+    <td><code>tvalid</code>/<code>tready</code> 握手或 <code>tlast</code> 边界</td>
+    <td>检查 TDATA 位宽（GEMM 64-bit ↔ DMA Stream Data Width 64-bit）与 <code>tlast</code> 位置</td>
+  </tr>
+  <tr>
+    <td>综合/实现 run 停在 <code>Scripts Generated</code>，PROGRESS 0%</td>
+    <td>Windows 计算机名含非 ASCII 字符，Tcl 崩溃</td>
+    <td>计算机名保持纯英文（已改）；重置所有 run 后重跑</td>
+  </tr>
+</table>
+
+<h3>交付前检查清单</h3>
+<ul class="chk">
+  <li>BD 中 <code>axis_data_fifo_0</code> 已消失，<code>gemm_up_proj_bd_0</code> 已接入</li>
+  <li>Address Editor：<code>axi_dma_0</code> @ 0xA0000000/64K，<code>gemm_up_proj_bd_0</code> @ 0xA0010000/64K，无 Unmapped</li>
+  <li><code>validate_bd_design</code> 无 error</li>
+  <li><code>up_proj_wrapper.bit</code> 时间戳 = 今天</li>
+  <li><code>up_proj_wrapper.bit.bin</code> 由 bootgen 生成，时间戳 ≥ <code>.bit</code></li>
+  <li>SW6 = 1000（SD 启动）</li>
+  <li>J83 串口能进 115200 控制台</li>
+  <li><code>fpga_manager/state</code> = <code>operating</code></li>
+  <li><code>dma_probe</code> 打印「通过」</li>
+  <li>GEMM <code>VERSION</code> 寄存器读回正确</li>
+  <li>DMA + GEMM 结果与 golden 逐 bit 一致</li>
+</ul>
+
+<footer>
+  up_proj GEMM · ZCU106 bring-up 指南 &nbsp;|&nbsp; 生成于 2026-10-01 &nbsp;|&nbsp; 对应工程 <code>fpga/up_proj_gemm</code>
+</footer>
+
+</div>
+</body>
+</html>

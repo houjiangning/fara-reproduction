@@ -1,0 +1,43 @@
+#=============================================================================
+# fara-bitstream.service —— 开机自动把 FaR 版 PL 比特流配置进 ZCU106 PL
+#
+# 机制：fara-load-bitstream.sh 往 fpga_manager 写 flags=0 + 固件名，
+#       完成 PL 全量配置并校验 state=operating（Type=oneshot + RemainAfterExit）。
+#
+# 为什么需要它：ZCU106 冷启动后 PL 是未配置的（state=unknown），
+#   而 fara-weights.service 只搬权重、不配 PL，所以此前每次冷启动
+#   都必须手动加载比特流。本服务与 fara-weights.service 一起实现
+#   "冷启动即就绪"：先配 PL，再搬权重。
+#
+# 固件介质：SD 卡 rootfs 的 /lib/firmware/up_proj_wrapper.bit.bin（只读）。
+#           .bit.bin 由 bootgen -arch zynqmp 从 .bit 转换而来。
+#
+# 安装（在板卡上执行一次）：
+#   sudo install -m0755 fara-load-bitstream.sh /usr/local/bin/
+#   sudo install -m0644 fara-bitstream.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now fara-bitstream.service
+#
+# 先手动跑一次确认无误（--force 可强制重配以验证加载通路）：
+#   sudo /usr/local/bin/fara-load-bitstream.sh --force
+#=============================================================================
+[Unit]
+Description=Configure ZCU106 PL with FaR bitstream (up_proj_wrapper)
+After=local-fs.target
+# 必须先配好 PL，权重服务才有可用的 GEMM/FaR 通路
+Before=fara-weights.service
+# 固件缺失时直接跳过，不反复失败
+ConditionPathExists=/lib/firmware/up_proj_wrapper.bit.bin
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/fara-load-bitstream.sh up_proj_wrapper.bit.bin
+TimeoutStartSec=60
+
+# 写 /sys/class/fpga_manager 需要 root，不需要额外 capability 面
+ProtectHome=read-only
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,28 @@
+{
+  "layer": "transformer.h.0.mlp.c_fc",
+  "div": 2,
+  "n_far": 8,
+  "n_tokens": 1,
+  "K": 768,
+  "M_TOTAL": 3072,
+  "M_TILE": 16,
+  "G": 8,
+  "N_IN": 2363136,
+  "N_OUT": 3072,
+  "n_hits": 16,
+  "activation_source": "synthetic(seed=20261005)",
+  "have_original_W": false,
+  "conservation": {
+    "max_abs_err": 2.86102294921875e-06,
+    "rel_err": 1.561474306564875e-07,
+    "note": "无原始 W，守恒参考无效"
+  },
+  "sw_timing_s": {
+    "base_linear": NaN,
+    "far_forward": NaN,
+    "far_overhead": NaN,
+    "reps": 50
+  },
+  "bin_file": "fpga/up_proj_gemm/board_test/far_bench_synthetic.bin",
+  "fmap_file": "fpga/up_proj_gemm/board_test/far_bench_synthetic.fmap"
+}

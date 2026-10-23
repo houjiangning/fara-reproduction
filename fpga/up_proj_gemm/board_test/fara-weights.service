@@ -1,0 +1,51 @@
+#=============================================================================
+# fara-weights.service -- 7-3 安全权重服务（PUF 门禁 + FE/KDF 解密 + canary）
+#
+# 机制：fara_infer_server 启动时执行安全链：
+#     PUF 采样(仅内存) -> FE/KDF 派生(密钥不出 PL) -> 解封 canary.bin ->
+#     HD 门禁 -> 流解密 [X|b|W_enc] -> probe 推理 canary 确认 -> 开 TCP。
+#   任一环节失败：清权重、fail-closed 退出（Restart 由 systemd 限次控制）。
+#
+#   取代旧版 fara-load-weights.sh -> fara-resident 链（明文权重已不存在）。
+#   板上只读密文：/opt/fara/models/board_W_*.enc（7-2 provisioning 产物）。
+#
+# 前置：
+#   1) fara-bitstream.service 已加载冻结比特流（GEMM 0x00020000）
+#   2) /opt/fara/puf/canary.bin + fara_canary_config.txt 已由
+#      `fara_infer_server --seal` 一次性生成
+#
+# 安装（板卡上执行一次）：
+#   sudo install -m0755 fara_infer_server /usr/local/bin/
+#   sudo install -m0644 fara-weights.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable fara-weights.service
+#
+# 一次性封印（部署时执行一次，之后不再需要）：
+#   ref66 先放到 /dev/shm（tmpfs），seal 完成立即销毁：
+#   sudo /usr/local/bin/fara_infer_server --seal \
+#        --enc-dir=/opt/fara/models --puf-dir=/opt/fara/puf \
+#        --ref66=/dev/shm/ref66.txt
+#   sudo shred -n1 -u /dev/shm/ref66.txt
+#=============================================================================
+[Unit]
+Description=FaR secure weights: PUF gate + FE/KDF decrypt + canary verify
+After=fara-bitstream.service
+Requires=fara-bitstream.service
+# 密文权重与封印锚点齐备才启动，否则静默跳过（不反复失败）
+ConditionPathExists=/opt/fara/models/board_W_transformer_h_0_mlp_c_fc.enc
+ConditionPathExists=/opt/fara/puf/canary.bin
+ConditionPathExists=/opt/fara/puf/fara_canary_config.txt
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/fara_infer_server --enc-dir=/opt/fara/models --puf-dir=/opt/fara/puf --port=9000
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=120
+
+# 需要 root：/dev/mem、pagemap(CAP_SYS_ADMIN)、/dev/dma_heap
+ProtectHome=read-only
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

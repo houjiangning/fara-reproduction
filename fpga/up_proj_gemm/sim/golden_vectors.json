@@ -1,0 +1,19 @@
+{
+  "K": 16,
+  "N": 2,
+  "M_TOTAL": 64,
+  "M_TILE": 16,
+  "G": 8,
+  "ADD_LAT": 4,
+  "MUL_LAT": 8,
+  "N_IN": 1120,
+  "N_OUT": 128,
+  "seed": 20260930,
+  "stress": true,
+  "sensitivity_vs_naive_order": {
+    "differing_words": 86,
+    "total_words": 128,
+    "max_ulp_distance": 16
+  },
+  "mem_file": "sim/golden_vectors.mem"
+}

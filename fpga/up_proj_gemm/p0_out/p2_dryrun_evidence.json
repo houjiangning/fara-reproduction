@@ -1,0 +1,92 @@
+{
+  "as_of": "2026-10-13",
+  "phase": "P2-dry-run",
+  "title": "P2 空跑验证：AES 解密块串在 GEMM 数据通路前的'加密透明'证据",
+  "note": "本文件为 P2 空跑新增产物，不改动任何既有成果与既有 evidence。",
+
+  "goal": "在尚未改动任何 Block Design 的前提下，先在仿真中证明：把 AES-256-CTR 解密块插在 DMA→GEMM 之间，GEMM 的输出与既有 golden 逐 bit 一致。",
+
+  "data_path_mirrored": {
+    "X_b": "明文直通到 GEMM 的 s_axis（真实部署里 X 来自 PC 不加密、b 仅 12 KB v1 不加密）",
+    "W": "密文 → aes256_ctr（解密）→ GEMM 的 s_axis",
+    "reason": "严格镜像真实流布局 [X 明文 | b 明文 | W 密文]，counter 从 W 段起点 0 开始"
+  },
+
+  "vector_config": {
+    "K": 16, "N": 2, "M_TOTAL": 64, "M_TILE": 16, "G": 8,
+    "ADD_LAT": 4, "MUL_LAT": 8,
+    "X_words": 32, "b_words": 64, "W_words": 1024, "W_offset": 96,
+    "plain_beats": 48, "cipher_beats": 512, "W_blocks": 256,
+    "N_IN": 1120, "N_OUT": 128,
+    "source": "tools/gen_golden_vectors.py（与 base 用例同参数、同 seed，golden 因此可比）"
+  },
+
+  "test_only_crypto": {
+    "key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "nonce_hex": "a0a1a2a3a4a5a6a7a8a9aaab",
+    "ctr_init": 0,
+    "warning": "固定测试密钥，仅供仿真；真实部署必须用 PUF 派生密钥"
+  },
+
+  "results": {
+    "gemm_in_words": 1120,
+    "gemm_out_words": 128,
+    "gemm_err": 0,
+    "aes_blocks_out": 256,
+    "aes_vs_plaintext_beats": "512/512 逐 beat 一致",
+    "gemm_output_words": "128/128 bit-exact（与明文向量跑出的 golden 完全一致）",
+    "verdict": "=== PASS ===  129 项通过，0 项失败"
+  },
+
+  "how_to_reproduce": "powershell -ExecutionPolicy Bypass -File tools/run_sim.ps1 -Only crypt",
+
+  "regression_all_branches": {
+    "note": "必须四个分支连跑：sim_work 共享，单跑掩盖 B8 这类跨分支污染。",
+    "base": "全部通过：4 组 bit-exact",
+    "far": "全部通过：3 组 bit-exact",
+    "aes": "68 项通过，0 项失败",
+    "crypt": "129 项通过，0 项失败"
+  },
+
+  "files_added": [
+    "tools/encrypt_vector_pack.py",
+    "sim/tb_gemm_crypt.sv"
+  ],
+  "files_modified": [
+    "tools/run_sim.ps1  (仅新增 -Only crypt 分支)"
+  ],
+  "rtl_files_unchanged": true,
+
+  "bugs_found_and_fixed": [
+    {
+      "id": "B7",
+      "symptom": "GEMM 输出全部不匹配，AES 解密结果与 Python golden 完全不同；但 tb_aes_ctr 的 NIST KAT 与随机向量却全部通过",
+      "root_cause": "TB 里把 nonce 写成 96'ha0a1a2a3a4a5a6a7a8a9aaab。按 aes256_ctr.sv 的契约，nonce 字节 0 必须位于 blk[7:0]（最低位），所以这个字面量让 12 个 nonce 字节整体反转，与 Python 的 counter_block() 不一致。",
+      "why_nist_kat_missed_it": "KAT 的 nonce 是从 .mem 读入的，而 .mem 由 Python 按小端整数写成，恰好抵消了 TB 的写法方向，所以 KAT 通过；只有 TB 里直接写 96-bit 字面量时才暴露。",
+      "evidence": "由 cipher^got 反推 RTL 实际 keystream = c04f0c0209eb09d157163c0c31921da0；用 nonce 反转后的 block 在 Python 里重算，逐字节命中。",
+      "fix": "nonce 字面量改为 96'habaaa9a8a7a6a5a4a3a2a1a0",
+      "hardening": "encrypt_vector_pack.py 现在会打印可直接粘贴的 Verilog 字面量（nonce 已反转），并把 key/nonce 的字节序差异写进 sidecar 的 byte_order_warning。"
+    },
+    {
+      "id": "B8",
+      "symptom": "单独跑 -Only crypt 通过；但在 -Only base 之后再跑 -Only crypt 就失败（65 项失败）",
+      "root_cause": "sim_work 在各分支间共享。base 分支最后一组用例会留下 K=8/N=1 的 golden_vectors.mem；crypt 的 TB 又把明文文件头部读进 h_k/n_in 等同一批变量，把它们污染成 K=8/N=1 的取值，于是分段与 golden 全错。",
+      "fix": "① TB 用独立的 ph_* 变量接收明文文件头部，并校验 ph_in == n_in；② crypt 分支把新生成的 golden_vectors.mem 一并拷进 sim_work。",
+      "note": "这类'共享工作目录 + 变量复用'的坑只在连续跑多个分支时出现，单跑看不见 —— 所以回归必须四个分支连跑。"
+    }
+  ],
+
+  "byte_order_contract_summary": {
+    "block_bytes": "块字节 j 位于 blk[8*j +: 8]  <=>  int.from_bytes(block_bytes,'little')",
+    "stream_to_block": "16 个连续流字节按出现顺序构成块字节 0..15；每 2 个 64-bit beat 成 1 块，第一拍为低 64 位",
+    "counter_block": "[ nonce(12B) | ctr 大端(4B) ]，nonce 字节 0 在 blk[7:0]",
+    "word_stream": "输入字依次每个按小端展开成 4 字节"
+  },
+
+  "conclusion": "解密块插入 GEMM 前对计算结果完全透明。P2 的 BD 集成风险由此大幅降低：只要接线上把 W 段经 AES、X/b 直通，GEMM 侧无需任何改动即可保持既有 bit-exact 契约。",
+
+  "next_phase": {
+    "id": "P1",
+    "goal": "PL 自建 Butterfly PUF 阵列 + 稳定性测量（P1 与 P2 可并行）"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "src": "golden_vectors.mem",
+  "dst": "crypt_vectors.mem",
+  "mode": "encrypt_W_segment_only",
+  "ctr_init": 0,
+  "layout": {
+    "X_words": 32,
+    "b_words": 64,
+    "W_words": 1024,
+    "W_offset": 96
+  },
+  "test_only_key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "test_only_nonce_hex": "a0a1a2a3a4a5a6a7a8a9aaab",
+  "verilog_literals": {
+    "key_256bit": "256'h000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "nonce_96bit": "96'habaaa9a8a7a6a5a4a3a2a1a0"
+  },
+  "roundtrip_ok": true,
+  "note": "固定测试密钥/随机数，仅供仿真；真实部署必须用 PUF 派生密钥",
+  "byte_order_warning": "key 的 byte0 位于 key_in[255:224]（即按人读顺序直接写）；nonce 的 byte0 位于 blk[7:0]（即字面量要反转）。两者方向相反，写 TB 常量时极易搞错。"
+}

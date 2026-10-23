@@ -1,0 +1,19 @@
+{
+  "K": 8,
+  "N": 1,
+  "M_TOTAL": 3072,
+  "M_TILE": 16,
+  "G": 8,
+  "ADD_LAT": 4,
+  "MUL_LAT": 8,
+  "N_IN": 27656,
+  "N_OUT": 3072,
+  "seed": 20260930,
+  "stress": true,
+  "sensitivity_vs_naive_order": {
+    "differing_words": 1452,
+    "total_words": 3072,
+    "max_ulp_distance": 4096
+  },
+  "mem_file": "sim/golden_vectors_k8n1.mem"
+}

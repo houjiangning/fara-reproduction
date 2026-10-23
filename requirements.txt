@@ -1,0 +1,7 @@
+torch>=2.0
+transformers>=4.38
+tokenizers>=0.15
+numpy
+# 可选：仅用于 PUF 方案的权重加解密工具（tools/weight_encrypt.py）加速。
+# 不装也能跑 —— 会自动回退到纯 Python 参考实现（慢但结果完全一致）。
+pycryptodome>=3.20

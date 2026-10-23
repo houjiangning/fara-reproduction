@@ -1,0 +1,45 @@
+#=============================================================================
+# fara-puf-sample.service -- sample the Butterfly PUF once per cold boot
+#
+# NOTE: keep this file ASCII-only (systemd unit files are read as ASCII anyway).
+#
+# Chain: fara-bitstream.service -> fara-puf-sample.service
+#        (the PUF registers only exist after the PL is configured)
+#
+# Install on the board (once):
+#   sudo install -m0755 fara-puf-sample.sh      /usr/local/bin/
+#   sudo install -m0644 fara-puf-sample.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable fara-puf-sample.service
+#
+# Manual test before enabling (do NOT reboot until this prints a response):
+#   sudo /usr/local/bin/fara-puf-sample.sh
+#
+# Override sampling parameters without editing this file:
+#   sudo systemctl edit fara-puf-sample.service
+#     [Service]
+#     Environment=M_SAMP=9 T_SETTLE=64
+#
+# To STOP accumulating samples (e.g. before re-flashing the bitstream):
+#   sudo systemctl disable --now fara-puf-sample.service
+#=============================================================================
+[Unit]
+Description=Sample Butterfly PUF once per boot and append to /opt/fara/puf/puf_samples.txt
+After=fara-bitstream.service
+Requires=fara-bitstream.service
+# Skip cleanly when the bitstream is absent (don't fail-loop)
+ConditionPathExists=/lib/firmware/up_proj_wrapper.bit.bin
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/fara-puf-sample.sh
+# PUF sampling is fast; 60s is generous headroom for the on-demand compile
+TimeoutStartSec=60
+
+# Needs root to mmap /dev/mem
+ProtectHome=read-only
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

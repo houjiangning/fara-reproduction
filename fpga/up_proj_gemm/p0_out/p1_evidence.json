@@ -1,0 +1,65 @@
+{
+  "stage": "7-1e-2 final frozen bitstream",
+  "build_date": "2026-10-18",
+  "tool": "Vivado 2022.2 (win64) Build 3671981",
+  "project": "up_proj_gemm_v2.xpr",
+  "device": "xczu7ev-ffvc1156-2-e (ZCU106, speed -2)",
+  "top": "up_proj_wrapper",
+  "synthesis": {
+    "progress": "100%",
+    "status": "synth_design Complete!",
+    "ooc_runs": 11
+  },
+  "puf_presence_check": {
+    "distinct_g_cell_indices": 128,
+    "expected": 128,
+    "pass": true
+  },
+  "implementation": {
+    "progress": "100%",
+    "status": "write_bitstream Complete!",
+    "drc_relax": {
+      "lutlp_1_severity": "Warning",
+      "allow_combinatorial_loops": "1024 nets / 384 cells, 0 refused",
+      "fired_steps": ["opt_design", "place_design"]
+    }
+  },
+  "freeze_compliance": {
+    "description": "post-impl LOC+BEL of every butterfly LUT vs constr/puf_loc_generated.tcl",
+    "entries": 256,
+    "ok": 256,
+    "mismatch": 0,
+    "pass": true
+  },
+  "timing": {
+    "wns_ns": 2.048,
+    "whs_ns": 0.010,
+    "reports": ["p0_out/timing_final.rpt"]
+  },
+  "utilization": {
+    "clb_luts": {"used": 41082, "available": 230400, "percent": 17.83, "fixed_puf_luts": 128},
+    "lut_as_logic": {"used": 39832, "percent": 17.29},
+    "lut_as_memory": {"used": 1250, "percent": 1.23},
+    "clb_registers_ff": {"used": 37235, "available": 460800, "percent": 8.08},
+    "carry8": {"used": 997, "percent": 3.46},
+    "bram36k_tiles": {"used": 48, "available": 312, "percent": 15.38},
+    "uram": {"used": 1, "available": 96, "percent": 1.04},
+    "dsp48e2": {"used": 105, "available": 1728, "percent": 6.08},
+    "report": "p0_out/util_final.rpt"
+  },
+  "artifacts": {
+    "bitstream": {
+      "path": "up_proj_gemm_v2.runs/impl_1/up_proj_wrapper.bit",
+      "bytes": 19311212,
+      "sha256": "A4EF266BD22372112866E30BF887E66D11749A11957A6EB634CDD114F95BE02C"
+    },
+    "bootgen_bin": {
+      "path": "p0_out/up_proj_wrapper_v2.bit.bin",
+      "bytes": 19321332,
+      "sha256": "74373E1137A350D0AA1CAE911B3B2916FBF421F3F3DADC653CB034B3C5FCF5BC",
+      "bootgen_cmd": "bootgen -image up_proj_v2.bif -arch zynqmp -o p0_out/up_proj_wrapper_v2.bit.bin -w"
+    }
+  },
+  "freeze_rule": "After provisioning on this bitstream, ANY RTL/BD change that triggers re-implementation invalidates PUF helper data and ciphertext. Do not rebuild.",
+  "next": ["7-2 one-time provisioning on board", "7-3 service-ization + L0-L4 regression", "stage 8 documentation"]
+}

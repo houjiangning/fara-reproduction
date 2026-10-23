@@ -1,0 +1,59 @@
+# ==== 安全红线：密钥/PUF 材料，绝不入库 ====
+puf_out/
+provision*/
+*.key
+*.pem
+
+# ==== 比特流与大二进制（可再生或另行分发） ====
+*.bit
+*.bit.bin
+*.bin
+*.pt
+*.zip
+*.7z
+*.tar.gz
+
+# ==== GPT-2 本地权重（522MB，HuggingFace 可重新下载） ====
+gpt2-local/
+
+# ==== 仿真 golden 向量 / Vivado 导出（可再生） ====
+*.mem
+*.xsa
+
+# ==== 第三方论文 PDF（版权，不入库） ====
+*.pdf
+
+# ==== 日志 ====
+*.log
+
+# ==== Vivado 工程生成产物（体积巨大、均可再生） ====
+*.gen/
+*.runs/
+*.cache/
+*.hw/
+*.sim/
+sim_work/
+.Xil/
+ip_user_files/
+*.jou
+*.str
+*.wdb
+*.dcp
+*.ltx
+*.pb
+*.wpc
+*.xpfm
+
+# ==== 板卡权重/密文导出（9MB 级，另行分发） ====
+board_export/*.bin
+
+# ==== 板端编译产物 ====
+fpga/up_proj_gemm/board_test/fara_infer_server
+*.elf
+*.o
+
+# ==== 语料 / 缓存 ====
+wikitext-2/
+__pycache__/
+*.pyc
+.trae/

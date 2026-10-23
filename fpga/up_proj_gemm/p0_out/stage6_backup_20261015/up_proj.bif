@@ -1,0 +1,6 @@
+// bif for FPGA Manager (.bit.bin) conversion -- Zynq UltraScale+ MPSoC
+// bootgen -image up_proj.bif -arch zynqmp -o p0_out/up_proj_wrapper.bit.bin -w
+all:
+{
+    up_proj_gemm.runs/impl_1/up_proj_wrapper.bit
+}
