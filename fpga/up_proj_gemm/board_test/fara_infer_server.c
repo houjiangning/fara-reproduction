@@ -7,9 +7,10 @@
  *     2. FE/KDF 派生密钥（PL 内部，密钥不出 PL）；
  *     3. 解封 canary.bin（PL AES 引擎，CTR 同一运算）-> 校验 magic +
  *        HD 门禁（R_t 与封印参考在 66 个选中位上的汉明距离）；
- *     4. HD 通过后经 wdec 流解密 [X|b|W_enc] -> 权重进常驻 dma_heap 缓冲；
- *     5. probe 推理（固定 X_probe）比对 SHA256(Y) 与封印值 -> Canary 确认；
- *     6. 全部通过才开 TCP 服务；失败则清权重、退出（fail-closed）。
+ *     4. HD 通过后把 W.enc / b 原样装入常驻 dma_heap 缓冲（不做预解密）；
+ *     5. 推理流 X|b|W_enc 经 wdec：W 段在 PL 内在线解密后直达 GEMM；
+ *     6. probe（固定 X_probe）比对 SHA256(Y) 与封印值 -> Canary 确认；
+ *     7. 全部通过才开 TCP 服务；失败则清缓冲、退出（fail-closed）。
  *
  *   对外开 TCP，收一条激活 X（N 个 token × 768 维 fp32），
  *   走 DMA -> PL(GEMM+far_reroute) -> DMA 拿回 Y，原样回给 PC。
@@ -216,14 +217,19 @@ struct dma_buf_sync { uint64_t flags; };
 
 /*---------------------------------------------------------------------------
  * canary 封印锚点
- *   blob 64B：[0..3]"FRS1" [4..7]ver [8..16]ref66(9B) [17..19]pad
+ *   blob 96B：[0..3]"FRS1" [4..7]ver [8..16]ref66(9B) [17..19]pad
  *             [20..51]sha256(Y_probe) [52..63]rsv
+ *             [64..95]image_digest
+ *   image_digest = SHA256( SHA256(W.enc) || SHA256(b) || SHA256(cfg) || LE32(IMG_VER) )
+ *     —— 字节级完整性，与 probe 的数值灵敏度无关；任一位改动都会失配。
  *   canary.bin = blob XOR keystream(AES-256-CTR, canary nonce, ctr0)
  *   canary nonce 必须与权重 nonce 不同（防同一 keystream 的已知明文攻击）
  *-------------------------------------------------------------------------*/
 #define CANARY_MAGIC  "FRS1"
-#define CANARY_VER    1u
-#define CANARY_BLOB_BYTES  64u
+#define CANARY_VER    2u          /* v2: 追加 image_digest 字段 */
+#define CANARY_BLOB_BYTES  96u
+#define CANARY_IMG_OFF     64u
+#define IMG_VER       1u          /* 镜像包格式版本，参与摘要；改布局必须递增 */
 #define NSEL_BITS     66u          /* k=22 -> 3k */
 #define SEC_ATTEMPTS  3            /* 采样/派生/解封/Canary 最大尝试次数 */
 
@@ -254,6 +260,7 @@ struct dma_buf_sync { uint64_t flags; };
 
 static const char *W_ENC_NAME = "board_W_transformer_h_0_mlp_c_fc.enc";
 static const char *B_NAME     = "board_b_transformer_h_0_mlp_c_fc.bin";
+static const char *C_NAME     = "board_cfg_transformer_h_0_mlp_c_fc.json";
 static const char *OUT_JSON   = "/run/fara-infer.json";
 
 /* 默认目录（可被 --enc-dir= / --puf-dir= 覆盖） */
@@ -294,7 +301,7 @@ typedef struct {
  * FARC 控制协议（8-x 实时集成）：与 FARQ 同一端口，按 magic 分流
  *   请求 20B："FARC" op p0 p1 p2   响应 12B："FARC" status n_words + n_words*4
  *   op: 1=STATUS  2=FLIP(idx,bit)  3=RESTORE  4=WIPE
- * 约束：只动运行期 DDR 明文工作副本（等价攻击者物理位翻转的执行器）；
+ * 约束：只动运行期 DDR 密文缓冲区（CTR 下翻密文位等价于翻对应明文位）；
  *       攻击决策/搜索全部在 PC；不碰 SD 密文 / 密钥材料 / RTL。
  *-------------------------------------------------------------------------*/
 typedef struct {
@@ -480,6 +487,52 @@ static int sha256_file_raw(const char *path, uint32_t out[8])
 }
 
 /*---------------------------------------------------------------------------
+ * 镜像完整性摘要（P1-a）
+ *   image_digest = SHA256( SHA256(W.enc) || SHA256(b) || SHA256(cfg) || LE32(IMG_VER) )
+ *   与 probe 的数值灵敏度无关：任意一个字节变化都会让摘要失配。
+ *-------------------------------------------------------------------------*/
+static void sha_words_to_bytes(const uint32_t in[8], uint8_t out[32])
+{
+    int i;
+    for (i = 0; i < 8; i++) {
+        out[4*i + 0] = (uint8_t)(in[i] >> 24);
+        out[4*i + 1] = (uint8_t)(in[i] >> 16);
+        out[4*i + 2] = (uint8_t)(in[i] >> 8);
+        out[4*i + 3] = (uint8_t)(in[i]);
+    }
+}
+
+static void bytes_to_hex(const uint8_t *p, size_t n, char *hex)
+{
+    static const char d[] = "0123456789abcdef";
+    size_t i;
+    for (i = 0; i < n; i++) {
+        hex[2*i]     = d[p[i] >> 4];
+        hex[2*i + 1] = d[p[i] & 0x0Fu];
+    }
+    hex[2*n] = 0;
+}
+
+static int image_digest_raw(const void *w, size_t wlen, const void *b, size_t blen,
+                            const char *cfg_path, uint8_t out[32])
+{
+    uint32_t h[8], d[8];
+    uint8_t cat[100];
+
+    sha256_raw_words(w, wlen, h);  sha_words_to_bytes(h, cat +  0);
+    sha256_raw_words(b, blen, h);  sha_words_to_bytes(h, cat + 32);
+    if (sha256_file_raw(cfg_path, h) != 0) return -1;
+    sha_words_to_bytes(h, cat + 64);
+    cat[96] = (uint8_t)(IMG_VER & 0xFFu);
+    cat[97] = (uint8_t)((IMG_VER >> 8) & 0xFFu);
+    cat[98] = (uint8_t)((IMG_VER >> 16) & 0xFFu);
+    cat[99] = (uint8_t)((IMG_VER >> 24) & 0xFFu);
+    sha256_raw_words(cat, sizeof cat, d);
+    sha_words_to_bytes(d, out);
+    return 0;
+}
+
+/*---------------------------------------------------------------------------
  * PL 寄存器 / DMA
  *-------------------------------------------------------------------------*/
 static uint32_t rd_d(unsigned off)              { return dma[off >> 2]; }
@@ -598,6 +651,15 @@ static size_t   g_buflen = 0;
 static uint64_t g_pa     = 0;
 static uint64_t g_in_pa  = 0;
 static uint64_t g_out_pa = 0;
+
+/* P0 在线解密运行态：W 不做预解密，随每次推理的 DMA 流在 PL 内解密。
+   nonce/CTR 必须每次传输前重装 —— 块计数器在 tlast 只回零，
+   不会自动回到 ctr_init，漏装会让第二次推理起 keystream 错位。 */
+static int      g_wdec_online = 0;
+static uint8_t  g_wnonce[12];
+static uint32_t g_wctr_init   = 0;
+static double   g_last_run_ms = 0.0;
+
 static volatile sig_atomic_t g_stop = 0;
 static void on_sig(int s) { (void)s; g_stop = 1; }
 
@@ -641,6 +703,20 @@ static int run_once(int far_en, uint32_t *far_hits, uint32_t *far_phase,
        不动 FaRMap 寄存器，但这里显式重写一次，杜绝顺序假设 */
     wr_g(R_FAR_CTRL, far_en ? 1u : 0u);
 
+    /* 运行期在线解密：本次传输前重装 nonce / CTR / 明文段长度。
+       明文段 = [X 区 | b 区]，W 段从 W_OFF 起全部送 AES。
+       必须每次重装：块计数器在 tlast 时只回到 0，不会自动回到 ctr_init。 */
+    if (g_wdec_online) {
+        for (int i = 0; i < 3; i++)
+            wr_c(D_NONCE0 + 4*i,
+                 (uint32_t)g_wnonce[4*i]        | ((uint32_t)g_wnonce[4*i + 1] << 8)
+               | ((uint32_t)g_wnonce[4*i + 2] << 16) | ((uint32_t)g_wnonce[4*i + 3] << 24));
+        wr_c(D_CTR_INIT,    g_wctr_init);
+        wr_c(D_PLAIN_WORDS, (uint32_t)(W_OFF / 4u));
+        wr_c(D_CTRL2,       0u);              /* route_mode=0: AES -> GEMM */
+        wr_c(D_CTRL,        0x8u);            /* ctr_load 脉冲 */
+    }
+
     wr_d(MM2S_DMACR, DMACR_RESET);
     wr_d(S2MM_DMACR, DMACR_RESET);
     usleep(2000);
@@ -677,6 +753,7 @@ static int run_once(int far_en, uint32_t *far_hits, uint32_t *far_phase,
         usleep(500);
     }
     *elapsed_ms = (now_s() - t0) * 1e3;
+    g_last_run_ms = *elapsed_ms;
 
     if (far_hits)  *far_hits  = rd_g(R_FAR_HITS);
     if (far_phase) *far_phase = rd_g(R_FAR_PHASE);
@@ -1066,17 +1143,8 @@ static void scratch_free(void)
     g_scr_in_pa = g_scr_out_pa = 0;
 }
 
-/* 把解密输出中的 b/W 拷进常驻缓冲并做 cache 维护 */
-static int install_weights_from(const uint8_t *out_region)
-{
-    const uint32_t *outw = (const uint32_t *)out_region;
-    memcpy(g_buf + B_OFF, outw + SEC_X_WORDS, B_BYTES);
-    memcpy(g_buf + W_OFF, outw + SEC_PLAIN_WORDS, W_BYTES);
-    if (buf_sync(g_buf_fd, DMA_BUF_SYNC_START | DMA_BUF_SYNC_WRITE) != 0) perror("  sync");
-    if (buf_sync(g_buf_fd, DMA_BUF_SYNC_END | DMA_BUF_SYNC_WRITE) != 0) perror("  sync");
-    if (have_dc) dcache_clean(g_buf + B_OFF, B_BYTES + W_BYTES);
-    return 0;
-}
+/* P0：不再需要“把解密结果搬进常驻区”，该函数已删除。
+   常驻区直接持有 W.enc，解密发生在推理流的 AES 段内。 */
 
 /* probe 推理：固定 X_probe -> GEMM -> SHA256(Y 行 0)，hex 写入 out_hex[65] */
 static int probe_infer(char out_hex[65])
@@ -1116,10 +1184,11 @@ static void wipe_resident_w(void)
  *-------------------------------------------------------------------------*/
 static int secure_boot(const dec_cfg_t *dc, const can_cfg_t *cc)
 {
-    char wp[512], bp[512], cp[512];
+    char wp[512], bp[512], cp[512], gp[512];
     snprintf(wp, sizeof wp, "%s/%s", g_enc_dir, W_ENC_NAME);
     snprintf(bp, sizeof bp, "%s/%s", g_enc_dir, B_NAME);
     snprintf(cp, sizeof cp, "%s/canary.bin", g_puf_dir);
+    snprintf(gp, sizeof gp, "%s/%s", g_enc_dir, C_NAME);
 
     /* ---- 源文件检查 ---- */
     uint8_t can_cipher[CANARY_BLOB_BYTES];
@@ -1182,7 +1251,7 @@ static int secure_boot(const dec_cfg_t *dc, const can_cfg_t *cc)
             wr_c(D_CTRL2, 0u);
             if (rc != 0) { fprintf(stderr, "[sec] unseal DMA fail rc=%d\n", rc); continue; }
             (void)buf_sync(g_scr_fd, DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ);
-            if (have_dc) dcache_inval(g_scr + (g_scr_out_pa - g_scr_in_pa), 64);
+            if (have_dc) dcache_inval(g_scr + (g_scr_out_pa - g_scr_in_pa), 128);
             (void)buf_sync(g_scr_fd, DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ);
             memcpy(blob, g_scr + (g_scr_out_pa - g_scr_in_pa), sizeof blob);
             if (memcmp(blob, CANARY_MAGIC, 4) != 0 ||
@@ -1205,42 +1274,49 @@ static int secure_boot(const dec_cfg_t *dc, const can_cfg_t *cc)
             else
                 printf("[sec] HD=%u <= T_CLEAN, clean path\n", hd);
 
-            /* 5. 解密权重流 [X|b|W_enc] -> [X|b|W_dec] */
+            /* 5. 装载密文权重：不做预解密，W.enc 直接进常驻缓冲。
+               推理时随 DMA 流在 PL 内逐拍解密后直达 GEMM。 */
             {
-                uint32_t *inw = (uint32_t *)g_scr;
-                for (uint32_t i = 0; i < SEC_X_WORDS; i++) inw[i] = 0xC0DEC0DEu;
                 if (fseek(fb, 0, SEEK_SET) != 0 ||
-                    fread(inw + SEC_X_WORDS, 1, B_BYTES, fb) != B_BYTES) {
+                    fread(g_buf + B_OFF, 1, B_BYTES, fb) != B_BYTES) {
                     fprintf(stderr, "[sec] read b failed\n"); continue;
                 }
                 if (fseek(fw, 0, SEEK_SET) != 0 ||
-                    fread(inw + SEC_PLAIN_WORDS, 1, W_BYTES, fw) != W_BYTES) {
+                    fread(g_buf + W_OFF, 1, W_BYTES, fw) != W_BYTES) {
                     fprintf(stderr, "[sec] read W_enc failed\n"); continue;
                 }
-                (void)buf_sync(g_scr_fd, DMA_BUF_SYNC_START | DMA_BUF_SYNC_WRITE);
-                (void)buf_sync(g_scr_fd, DMA_BUF_SYNC_END | DMA_BUF_SYNC_WRITE);
-                if (have_dc) dcache_clean(g_scr, SEC_STREAM_BYTES);
-                wr_c(D_CTRL2, 1u);
-                double t0 = now_s();
-                rc = wdec_pass(dc->nonce, dc->ctr_init, dc->plain_words,
-                               g_scr_in_pa, g_scr_out_pa, SEC_STREAM_BYTES);
-                double dec_ms = (now_s() - t0) * 1e3;
-                wr_c(D_CTRL2, 0u);
-                if (rc != 0) { fprintf(stderr, "[sec] decrypt DMA fail rc=%d\n", rc); continue; }
-                (void)buf_sync(g_scr_fd, DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ);
-                if (have_dc) dcache_inval(g_scr + (g_scr_out_pa - g_scr_in_pa), SEC_STREAM_BYTES);
-                (void)buf_sync(g_scr_fd, DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ);
-                install_weights_from(g_scr + (g_scr_out_pa - g_scr_in_pa));
-                /* 明文 W 立即清出 scratch（常驻区副本由失败路径负责清） */
-                secure_wipe(g_scr + (g_scr_out_pa - g_scr_in_pa), SEC_STREAM_BYTES);
-                (void)buf_sync(g_scr_fd, DMA_BUF_SYNC_END | DMA_BUF_SYNC_WRITE);
-                /* 关键：wdec 永远串在 DMA->GEMM 通路上（axis_route2 只管输出选路）。
-                   probe/推理/L3 的流是明文，必须置全直通，否则 word>=plain_words
-                   的数据被 XOR keystream（表现为确定但错误 / 全 NaN）。 */
-                wr_c(D_PLAIN_WORDS, 0xFFFFFFFFu);
-                g_bi.dec_ms_x100 = (uint32_t)(dec_ms * 100.0 + 0.5);
-                g_bi.fe_k_used   = k_used;
-                printf("[sec] weights decrypted+installed (%.1f ms)\n", dec_ms);
+                (void)buf_sync(g_buf_fd, DMA_BUF_SYNC_START | DMA_BUF_SYNC_WRITE);
+                (void)buf_sync(g_buf_fd, DMA_BUF_SYNC_END   | DMA_BUF_SYNC_WRITE);
+                if (have_dc) dcache_clean(g_buf + B_OFF, B_BYTES + W_BYTES);
+
+                memcpy(g_wnonce, dc->nonce, sizeof g_wnonce);
+                g_wctr_init   = dc->ctr_init;
+                g_wdec_online = 1;   /* run_once 每次传输前据此重装参数 */
+                g_bi.fe_k_used = k_used;
+                printf("[sec] weights resident as ciphertext（在线解密）\n");
+            }
+
+            /* 5b. 镜像完整性：W.enc / b / cfg 的字节级摘要必须与封印锚点一致。
+                   这一步与 probe 的数值灵敏度无关，任意一位篡改都会失配。 */
+            {
+                uint8_t got[32];
+                double t_dg = now_s();
+                if (image_digest_raw(g_buf + W_OFF, W_BYTES,
+                                     g_buf + B_OFF, B_BYTES, gp, got) != 0) {
+                    fprintf(stderr, "[sec] image digest compute failed（cfg 缺失？）\n");
+                    continue;
+                }
+                double dg_ms = (now_s() - t_dg) * 1e3;
+                if (memcmp(got, blob + CANARY_IMG_OFF, 32) != 0) {
+                    char gh[65], wh[65];
+                    bytes_to_hex(got, 32, gh);
+                    bytes_to_hex(blob + CANARY_IMG_OFF, 32, wh);
+                    fprintf(stderr, "[sec] IMAGE INTEGRITY FAIL\n"
+                                    "  got  %s\n  want %s\n", gh, wh);
+                    wipe_resident_w();
+                    continue;
+                }
+                printf("[sec] image digest match（W.enc|b|cfg 字节级一致, %.1f ms）\n", dg_ms);
             }
 
             /* 6. Canary：probe 推理比对封印的 SHA256(Y) */
@@ -1255,7 +1331,8 @@ static int secure_boot(const dec_cfg_t *dc, const can_cfg_t *cc)
                     wipe_resident_w();
                     continue;
                 }
-                printf("[sec] canary hash match\n");
+                g_bi.dec_ms_x100 = (uint32_t)(g_last_run_ms * 100.0 + 0.5);
+                printf("[sec] canary hash match（首次在线解密+推理 %.1f ms）\n", g_last_run_ms);
             }
             ok = 1;
             g_bi.boot_ok   = 1;
@@ -1286,9 +1363,10 @@ static int secure_boot(const dec_cfg_t *dc, const can_cfg_t *cc)
  *-------------------------------------------------------------------------*/
 static int do_seal(const dec_cfg_t *dc, const char *ref66_path)
 {
-    char wp[512], bp[512], cp[512], kp[512];
+    char wp[512], bp[512], cp[512], gp[512], kp[512];
     snprintf(wp, sizeof wp, "%s/%s", g_enc_dir, W_ENC_NAME);
     snprintf(bp, sizeof bp, "%s/%s", g_enc_dir, B_NAME);
+    snprintf(gp, sizeof gp, "%s/%s", g_enc_dir, C_NAME);
     snprintf(cp, sizeof cp, "%s/canary.bin", g_puf_dir);
     snprintf(kp, sizeof kp, "%s/%s", g_puf_dir, "fara_canary_config.txt");
 
@@ -1340,35 +1418,24 @@ static int do_seal(const dec_cfg_t *dc, const char *ref66_path)
     if (dec_derive(dc, &k_used) != 0) { scratch_free(); return -1; }
     printf("[seal] fe_done k_used=%u\n", k_used);
 
-    /* 2. 解密权重 -> 常驻缓冲 */
+    /* 2. 装载密文权重（在线解密，不生成明文副本） */
     {
-        uint32_t *inw = (uint32_t *)g_scr;
         FILE *fb = fopen(bp, "rb");
         FILE *fw = fopen(wp, "rb");
         if (!fb || !fw) { perror("[seal] open model"); if (fb) fclose(fb); if (fw) fclose(fw); scratch_free(); return -1; }
-        for (uint32_t i = 0; i < SEC_X_WORDS; i++) inw[i] = 0xC0DEC0DEu;
-        if (fread(inw + SEC_X_WORDS, 1, B_BYTES, fb) != B_BYTES ||
-            fread(inw + SEC_PLAIN_WORDS, 1, W_BYTES, fw) != W_BYTES) {
+        if (fread(g_buf + B_OFF, 1, B_BYTES, fb) != B_BYTES ||
+            fread(g_buf + W_OFF, 1, W_BYTES, fw) != W_BYTES) {
             fprintf(stderr, "[seal] short read\n"); fclose(fb); fclose(fw); scratch_free(); return -1;
         }
         fclose(fb); fclose(fw);
-        (void)buf_sync(g_scr_fd, DMA_BUF_SYNC_START | DMA_BUF_SYNC_WRITE);
-        (void)buf_sync(g_scr_fd, DMA_BUF_SYNC_END | DMA_BUF_SYNC_WRITE);
-        if (have_dc) dcache_clean(g_scr, SEC_STREAM_BYTES);
-        wr_c(D_CTRL2, 1u);
-        int rc = wdec_pass(dc->nonce, dc->ctr_init, dc->plain_words,
-                           g_scr_in_pa, g_scr_out_pa, SEC_STREAM_BYTES);
-        wr_c(D_CTRL2, 0u);                                /* GEMM probe 需要 route0 */
-        if (rc != 0) { fprintf(stderr, "[seal] decrypt fail rc=%d\n", rc); scratch_free(); return -1; }
-        (void)buf_sync(g_scr_fd, DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ);
-        if (have_dc) dcache_inval(g_scr + (g_scr_out_pa - g_scr_in_pa), SEC_STREAM_BYTES);
-        (void)buf_sync(g_scr_fd, DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ);
-        install_weights_from(g_scr + (g_scr_out_pa - g_scr_in_pa));
-        secure_wipe(g_scr + (g_scr_out_pa - g_scr_in_pa), SEC_STREAM_BYTES);
-        (void)buf_sync(g_scr_fd, DMA_BUF_SYNC_END | DMA_BUF_SYNC_WRITE);
-        /* probe 前必须全直通（wdec 串在通路上，见 secure_boot 注释） */
-        wr_c(D_PLAIN_WORDS, 0xFFFFFFFFu);
-        printf("[seal] weights decrypted+installed\n");
+        (void)buf_sync(g_buf_fd, DMA_BUF_SYNC_START | DMA_BUF_SYNC_WRITE);
+        (void)buf_sync(g_buf_fd, DMA_BUF_SYNC_END   | DMA_BUF_SYNC_WRITE);
+        if (have_dc) dcache_clean(g_buf + B_OFF, B_BYTES + W_BYTES);
+
+        memcpy(g_wnonce, dc->nonce, sizeof g_wnonce);
+        g_wctr_init   = dc->ctr_init;
+        g_wdec_online = 1;
+        printf("[seal] weights resident as ciphertext（在线解密）\n");
     }
 
     /* 3. probe 推理 */
@@ -1386,6 +1453,19 @@ static int do_seal(const dec_cfg_t *dc, const char *ref66_path)
         for (int i = 0; i < 32; i++) { char t[3] = { yhex[2*i], yhex[2*i+1], 0 }; yraw[i] = (uint8_t)strtoul(t, 0, 16); }
         memcpy(blob + 20, yraw, 32);
     }
+    /* 4b. 镜像摘要：与运行期 secure_boot 用同一公式 */
+    {
+        uint8_t img[32];
+        char ih[65];
+        if (image_digest_raw(g_buf + W_OFF, W_BYTES,
+                             g_buf + B_OFF, B_BYTES, gp, img) != 0) {
+            fprintf(stderr, "[seal] image digest failed（cfg 缺失？）\n");
+            scratch_free(); wipe_resident_w(); return -1;
+        }
+        memcpy(blob + CANARY_IMG_OFF, img, 32);
+        bytes_to_hex(img, 32, ih);
+        printf("[seal] image digest %s\n", ih);
+    }
     memcpy(g_scr, blob, sizeof blob);
     memset(g_scr + sizeof blob, 0, 64);
     (void)buf_sync(g_scr_fd, DMA_BUF_SYNC_START | DMA_BUF_SYNC_WRITE);
@@ -1398,7 +1478,7 @@ static int do_seal(const dec_cfg_t *dc, const char *ref66_path)
     /* 5. 回读自校验：把密文再过一遍引擎，必须还原出 blob */
     {
         (void)buf_sync(g_scr_fd, DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ);
-        if (have_dc) dcache_inval(g_scr + (g_scr_out_pa - g_scr_in_pa), 64);
+        if (have_dc) dcache_inval(g_scr + (g_scr_out_pa - g_scr_in_pa), 128);
         (void)buf_sync(g_scr_fd, DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ);
         memcpy(cipher, g_scr + (g_scr_out_pa - g_scr_in_pa), sizeof cipher);
 
@@ -1410,7 +1490,7 @@ static int do_seal(const dec_cfg_t *dc, const char *ref66_path)
         wr_c(D_CTRL2, 0u);
         if (rc != 0) { fprintf(stderr, "[seal] verify fail rc=%d\n", rc); scratch_free(); wipe_resident_w(); return -1; }
         (void)buf_sync(g_scr_fd, DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ);
-        if (have_dc) dcache_inval(g_scr + (g_scr_out_pa - g_scr_in_pa), 64);
+        if (have_dc) dcache_inval(g_scr + (g_scr_out_pa - g_scr_in_pa), 128);
         (void)buf_sync(g_scr_fd, DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ);
         if (memcmp(g_scr + (g_scr_out_pa - g_scr_in_pa), blob, sizeof blob) != 0) {
             fprintf(stderr, "[seal] VERIFY FAIL: round-trip mismatch\n");
@@ -1517,6 +1597,7 @@ static void ctrl_status_words(uint32_t w[24])
     memcpy(w + 16, g_bi.enc_hash, 32u);
 }
 
+#ifndef FARA_PROD
 /* 返回 0 = 连接继续；-1 = 断开 */
 static int handle_ctrl(int cfd, const ctrl_req_t *cq)
 {
@@ -1565,6 +1646,7 @@ static int handle_ctrl(int cfd, const ctrl_req_t *cq)
         return send_ctrl(cfd, 1, NULL, 0) == 0 ? 0 : -1;
     }
 }
+#endif /* FARA_PROD：生产构建裁掉 FARC 控制通道 */
 
 static int handle_conn(int cfd)
 {
@@ -1581,6 +1663,7 @@ static int handle_conn(int cfd)
         int st;
 
         if (recv_all(cfd, &rh, sizeof rh) != 0) break;      /* 对端关闭 */
+#ifndef FARA_PROD
         if (memcmp(rh.magic, "FARC", 4) == 0) {             /* 控制报文 */
             ctrl_req_t cq;
             memcpy(cq.magic, rh.magic, 4);
@@ -1588,6 +1671,7 @@ static int handle_conn(int cfd)
             if (handle_ctrl(cfd, &cq) != 0) break;
             continue;
         }
+#endif
         if (memcmp(rh.magic, "FARQ", 4) != 0) {
             fprintf(stderr, "[srv] bad req magic\n");
             break;

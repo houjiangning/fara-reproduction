@@ -251,32 +251,32 @@
           <Attr Name="UsedIn" Val="implementation"/>
           <Attr Name="UsedIn" Val="simulation"/>
         </FileInfo>
-        <CompFileExtendedInfo CompFileName="up_proj.bd" FileRelPathName="ip/up_proj_axis_route2_0_0_1/up_proj_axis_route2_0_0.xci">
-          <Proxy FileSetName="up_proj_axis_route2_0_0"/>
+        <CompFileExtendedInfo CompFileName="up_proj.bd" FileRelPathName="ip/up_proj_gemm_up_proj_bd_0_0/up_proj_gemm_up_proj_bd_0_0.xci">
+          <Proxy FileSetName="up_proj_gemm_up_proj_bd_0_0"/>
         </CompFileExtendedInfo>
-        <CompFileExtendedInfo CompFileName="up_proj.bd" FileRelPathName="ip/up_proj_puf_dec_bd_0_0_1/up_proj_puf_dec_bd_0_0.xci">
-          <Proxy FileSetName="up_proj_puf_dec_bd_0_0"/>
+        <CompFileExtendedInfo CompFileName="up_proj.bd" FileRelPathName="ip/up_proj_axi_dma_0_0_2/up_proj_axi_dma_0_0.xci">
+          <Proxy FileSetName="up_proj_axi_dma_0_0"/>
         </CompFileExtendedInfo>
         <CompFileExtendedInfo CompFileName="up_proj.bd" FileRelPathName="ip/up_proj_smartconnect_0_0_2/up_proj_smartconnect_0_0.xci">
           <Proxy FileSetName="up_proj_smartconnect_0_0"/>
         </CompFileExtendedInfo>
+        <CompFileExtendedInfo CompFileName="up_proj.bd" FileRelPathName="ip/up_proj_zynq_ultra_ps_e_0_0_2/up_proj_zynq_ultra_ps_e_0_0.xci">
+          <Proxy FileSetName="up_proj_zynq_ultra_ps_e_0_0"/>
+        </CompFileExtendedInfo>
         <CompFileExtendedInfo CompFileName="up_proj.bd" FileRelPathName="ip/up_proj_rst_ps8_0_99M_0_2/up_proj_rst_ps8_0_99M_0.xci">
           <Proxy FileSetName="up_proj_rst_ps8_0_99M_0"/>
-        </CompFileExtendedInfo>
-        <CompFileExtendedInfo CompFileName="up_proj.bd" FileRelPathName="ip/up_proj_puf_bd_0_0_1/up_proj_puf_bd_0_0.xci">
-          <Proxy FileSetName="up_proj_puf_bd_0_0"/>
-        </CompFileExtendedInfo>
-        <CompFileExtendedInfo CompFileName="up_proj.bd" FileRelPathName="ip/up_proj_gemm_up_proj_bd_0_0/up_proj_gemm_up_proj_bd_0_0.xci">
-          <Proxy FileSetName="up_proj_gemm_up_proj_bd_0_0"/>
         </CompFileExtendedInfo>
         <CompFileExtendedInfo CompFileName="up_proj.bd" FileRelPathName="ip/up_proj_smartconnect_1_0_2/up_proj_smartconnect_1_0.xci">
           <Proxy FileSetName="up_proj_smartconnect_1_0"/>
         </CompFileExtendedInfo>
-        <CompFileExtendedInfo CompFileName="up_proj.bd" FileRelPathName="ip/up_proj_zynq_ultra_ps_e_0_0_2/up_proj_zynq_ultra_ps_e_0_0.xci">
-          <Proxy FileSetName="up_proj_zynq_ultra_ps_e_0_0"/>
+        <CompFileExtendedInfo CompFileName="up_proj.bd" FileRelPathName="ip/up_proj_puf_dec_bd_0_0_1/up_proj_puf_dec_bd_0_0.xci">
+          <Proxy FileSetName="up_proj_puf_dec_bd_0_0"/>
         </CompFileExtendedInfo>
-        <CompFileExtendedInfo CompFileName="up_proj.bd" FileRelPathName="ip/up_proj_axi_dma_0_0_2/up_proj_axi_dma_0_0.xci">
-          <Proxy FileSetName="up_proj_axi_dma_0_0"/>
+        <CompFileExtendedInfo CompFileName="up_proj.bd" FileRelPathName="ip/up_proj_puf_bd_0_0_1/up_proj_puf_bd_0_0.xci">
+          <Proxy FileSetName="up_proj_puf_bd_0_0"/>
+        </CompFileExtendedInfo>
+        <CompFileExtendedInfo CompFileName="up_proj.bd" FileRelPathName="ip/up_proj_axis_route2_0_0_1/up_proj_axis_route2_0_0.xci">
+          <Proxy FileSetName="up_proj_axis_route2_0_0"/>
         </CompFileExtendedInfo>
       </File>
       <File Path="$PGENDIR/sources_1/bd/up_proj/hdl/up_proj_wrapper.v">
@@ -439,7 +439,9 @@
   <Runs Version="1" Minor="19">
     <Run Id="synth_1" Type="Ft3:Synth" SrcSet="sources_1" Part="xczu7ev-ffvc1156-2-e" ConstrsSet="constrs_1" Description="Vivado Synthesis Defaults" AutoIncrementalCheckpoint="true" WriteIncrSynthDcp="false" State="current" Dir="$PRUNDIR/synth_1" IncludeInArchive="true" IsChild="false" AutoIncrementalDir="$PPRDIR/up_proj_gemm.srcs/utils_1/imports/synth_1" AutoRQSDir="$PPRDIR/up_proj_gemm.srcs/utils_1/imports/synth_1">
       <Strategy Version="1" Minor="2">
-        <StratHandle Name="Vivado Synthesis Defaults" Flow="Vivado Synthesis 2022"/>
+        <StratHandle Name="Vivado Synthesis Defaults" Flow="Vivado Synthesis 2022">
+          <Desc>Vivado Synthesis Defaults</Desc>
+        </StratHandle>
         <Step Id="synth_design"/>
       </Strategy>
       <GeneratedRun Dir="$PRUNDIR" File="gen_run.xml"/>
@@ -449,9 +451,7 @@
     </Run>
     <Run Id="fp32_add_ip_synth_1" Type="Ft3:Synth" SrcSet="fp32_add_ip" Part="xczu7ev-ffvc1156-2-e" ConstrsSet="fp32_add_ip" Description="Vivado Synthesis Defaults" AutoIncrementalCheckpoint="false" WriteIncrSynthDcp="false" Dir="$PRUNDIR/fp32_add_ip_synth_1" IncludeInArchive="true" IsChild="false" AutoIncrementalDir="$PSRCDIR/utils_1/imports/fp32_add_ip_synth_1" AutoRQSDir="$PSRCDIR/utils_1/imports/fp32_add_ip_synth_1">
       <Strategy Version="1" Minor="2">
-        <StratHandle Name="Vivado Synthesis Defaults" Flow="Vivado Synthesis 2022">
-          <Desc>Vivado Synthesis Defaults</Desc>
-        </StratHandle>
+        <StratHandle Name="Vivado Synthesis Defaults" Flow="Vivado Synthesis 2022"/>
         <Step Id="synth_design"/>
       </Strategy>
       <GeneratedRun Dir="$PRUNDIR" File="gen_run.xml"/>
@@ -461,9 +461,7 @@
     </Run>
     <Run Id="fp32_mul_ip_synth_1" Type="Ft3:Synth" SrcSet="fp32_mul_ip" Part="xczu7ev-ffvc1156-2-e" ConstrsSet="fp32_mul_ip" Description="Vivado Synthesis Defaults" AutoIncrementalCheckpoint="false" WriteIncrSynthDcp="false" Dir="$PRUNDIR/fp32_mul_ip_synth_1" IncludeInArchive="true" IsChild="false" AutoIncrementalDir="$PSRCDIR/utils_1/imports/fp32_mul_ip_synth_1" AutoRQSDir="$PSRCDIR/utils_1/imports/fp32_mul_ip_synth_1">
       <Strategy Version="1" Minor="2">
-        <StratHandle Name="Vivado Synthesis Defaults" Flow="Vivado Synthesis 2022">
-          <Desc>Vivado Synthesis Defaults</Desc>
-        </StratHandle>
+        <StratHandle Name="Vivado Synthesis Defaults" Flow="Vivado Synthesis 2022"/>
         <Step Id="synth_design"/>
       </Strategy>
       <GeneratedRun Dir="$PRUNDIR" File="gen_run.xml"/>
@@ -473,9 +471,7 @@
     </Run>
     <Run Id="up_proj_axis_route2_0_0_synth_1" Type="Ft3:Synth" SrcSet="up_proj_axis_route2_0_0" Part="xczu7ev-ffvc1156-2-e" ConstrsSet="up_proj_axis_route2_0_0" Description="Vivado Synthesis Defaults" AutoIncrementalCheckpoint="false" WriteIncrSynthDcp="false" Dir="$PRUNDIR/up_proj_axis_route2_0_0_synth_1" IncludeInArchive="true" IsChild="false" AutoIncrementalDir="$PSRCDIR/utils_1/imports/up_proj_axis_route2_0_0_synth_1" AutoRQSDir="$PSRCDIR/utils_1/imports/up_proj_axis_route2_0_0_synth_1">
       <Strategy Version="1" Minor="2">
-        <StratHandle Name="Vivado Synthesis Defaults" Flow="Vivado Synthesis 2022">
-          <Desc>Vivado Synthesis Defaults</Desc>
-        </StratHandle>
+        <StratHandle Name="Vivado Synthesis Defaults" Flow="Vivado Synthesis 2022"/>
         <Step Id="synth_design"/>
       </Strategy>
       <GeneratedRun Dir="$PRUNDIR" File="gen_run.xml"/>
@@ -485,9 +481,7 @@
     </Run>
     <Run Id="up_proj_puf_dec_bd_0_0_synth_1" Type="Ft3:Synth" SrcSet="up_proj_puf_dec_bd_0_0" Part="xczu7ev-ffvc1156-2-e" ConstrsSet="up_proj_puf_dec_bd_0_0" Description="Vivado Synthesis Defaults" AutoIncrementalCheckpoint="false" WriteIncrSynthDcp="false" Dir="$PRUNDIR/up_proj_puf_dec_bd_0_0_synth_1" IncludeInArchive="true" IsChild="false" AutoIncrementalDir="$PSRCDIR/utils_1/imports/up_proj_puf_dec_bd_0_0_synth_1" AutoRQSDir="$PSRCDIR/utils_1/imports/up_proj_puf_dec_bd_0_0_synth_1">
       <Strategy Version="1" Minor="2">
-        <StratHandle Name="Vivado Synthesis Defaults" Flow="Vivado Synthesis 2022">
-          <Desc>Vivado Synthesis Defaults</Desc>
-        </StratHandle>
+        <StratHandle Name="Vivado Synthesis Defaults" Flow="Vivado Synthesis 2022"/>
         <Step Id="synth_design"/>
       </Strategy>
       <GeneratedRun Dir="$PRUNDIR" File="gen_run.xml"/>
@@ -497,9 +491,7 @@
     </Run>
     <Run Id="up_proj_smartconnect_0_0_synth_1" Type="Ft3:Synth" SrcSet="up_proj_smartconnect_0_0" Part="xczu7ev-ffvc1156-2-e" ConstrsSet="up_proj_smartconnect_0_0" Description="Vivado Synthesis Defaults" AutoIncrementalCheckpoint="false" WriteIncrSynthDcp="false" Dir="$PRUNDIR/up_proj_smartconnect_0_0_synth_1" IncludeInArchive="true" IsChild="false" AutoIncrementalDir="$PSRCDIR/utils_1/imports/up_proj_smartconnect_0_0_synth_1" AutoRQSDir="$PSRCDIR/utils_1/imports/up_proj_smartconnect_0_0_synth_1">
       <Strategy Version="1" Minor="2">
-        <StratHandle Name="Vivado Synthesis Defaults" Flow="Vivado Synthesis 2022">
-          <Desc>Vivado Synthesis Defaults</Desc>
-        </StratHandle>
+        <StratHandle Name="Vivado Synthesis Defaults" Flow="Vivado Synthesis 2022"/>
         <Step Id="synth_design"/>
       </Strategy>
       <GeneratedRun Dir="$PRUNDIR" File="gen_run.xml"/>
@@ -509,9 +501,7 @@
     </Run>
     <Run Id="up_proj_rst_ps8_0_99M_0_synth_1" Type="Ft3:Synth" SrcSet="up_proj_rst_ps8_0_99M_0" Part="xczu7ev-ffvc1156-2-e" ConstrsSet="up_proj_rst_ps8_0_99M_0" Description="Vivado Synthesis Defaults" AutoIncrementalCheckpoint="false" WriteIncrSynthDcp="false" Dir="$PRUNDIR/up_proj_rst_ps8_0_99M_0_synth_1" IncludeInArchive="true" IsChild="false" AutoIncrementalDir="$PSRCDIR/utils_1/imports/up_proj_rst_ps8_0_99M_0_synth_1" AutoRQSDir="$PSRCDIR/utils_1/imports/up_proj_rst_ps8_0_99M_0_synth_1">
       <Strategy Version="1" Minor="2">
-        <StratHandle Name="Vivado Synthesis Defaults" Flow="Vivado Synthesis 2022">
-          <Desc>Vivado Synthesis Defaults</Desc>
-        </StratHandle>
+        <StratHandle Name="Vivado Synthesis Defaults" Flow="Vivado Synthesis 2022"/>
         <Step Id="synth_design"/>
       </Strategy>
       <GeneratedRun Dir="$PRUNDIR" File="gen_run.xml"/>
@@ -521,9 +511,7 @@
     </Run>
     <Run Id="up_proj_puf_bd_0_0_synth_1" Type="Ft3:Synth" SrcSet="up_proj_puf_bd_0_0" Part="xczu7ev-ffvc1156-2-e" ConstrsSet="up_proj_puf_bd_0_0" Description="Vivado Synthesis Defaults" AutoIncrementalCheckpoint="false" WriteIncrSynthDcp="false" Dir="$PRUNDIR/up_proj_puf_bd_0_0_synth_1" IncludeInArchive="true" IsChild="false" AutoIncrementalDir="$PSRCDIR/utils_1/imports/up_proj_puf_bd_0_0_synth_1" AutoRQSDir="$PSRCDIR/utils_1/imports/up_proj_puf_bd_0_0_synth_1">
       <Strategy Version="1" Minor="2">
-        <StratHandle Name="Vivado Synthesis Defaults" Flow="Vivado Synthesis 2022">
-          <Desc>Vivado Synthesis Defaults</Desc>
-        </StratHandle>
+        <StratHandle Name="Vivado Synthesis Defaults" Flow="Vivado Synthesis 2022"/>
         <Step Id="synth_design"/>
       </Strategy>
       <GeneratedRun Dir="$PRUNDIR" File="gen_run.xml"/>
@@ -533,9 +521,7 @@
     </Run>
     <Run Id="up_proj_gemm_up_proj_bd_0_0_synth_1" Type="Ft3:Synth" SrcSet="up_proj_gemm_up_proj_bd_0_0" Part="xczu7ev-ffvc1156-2-e" ConstrsSet="up_proj_gemm_up_proj_bd_0_0" Description="Vivado Synthesis Defaults" AutoIncrementalCheckpoint="false" WriteIncrSynthDcp="false" Dir="$PRUNDIR/up_proj_gemm_up_proj_bd_0_0_synth_1" IncludeInArchive="true" IsChild="false" AutoIncrementalDir="$PSRCDIR/utils_1/imports/up_proj_gemm_up_proj_bd_0_0_synth_1" AutoRQSDir="$PSRCDIR/utils_1/imports/up_proj_gemm_up_proj_bd_0_0_synth_1">
       <Strategy Version="1" Minor="2">
-        <StratHandle Name="Vivado Synthesis Defaults" Flow="Vivado Synthesis 2022">
-          <Desc>Vivado Synthesis Defaults</Desc>
-        </StratHandle>
+        <StratHandle Name="Vivado Synthesis Defaults" Flow="Vivado Synthesis 2022"/>
         <Step Id="synth_design"/>
       </Strategy>
       <GeneratedRun Dir="$PRUNDIR" File="gen_run.xml"/>
@@ -545,9 +531,7 @@
     </Run>
     <Run Id="up_proj_smartconnect_1_0_synth_1" Type="Ft3:Synth" SrcSet="up_proj_smartconnect_1_0" Part="xczu7ev-ffvc1156-2-e" ConstrsSet="up_proj_smartconnect_1_0" Description="Vivado Synthesis Defaults" AutoIncrementalCheckpoint="false" WriteIncrSynthDcp="false" Dir="$PRUNDIR/up_proj_smartconnect_1_0_synth_1" IncludeInArchive="true" IsChild="false" AutoIncrementalDir="$PSRCDIR/utils_1/imports/up_proj_smartconnect_1_0_synth_1" AutoRQSDir="$PSRCDIR/utils_1/imports/up_proj_smartconnect_1_0_synth_1">
       <Strategy Version="1" Minor="2">
-        <StratHandle Name="Vivado Synthesis Defaults" Flow="Vivado Synthesis 2022">
-          <Desc>Vivado Synthesis Defaults</Desc>
-        </StratHandle>
+        <StratHandle Name="Vivado Synthesis Defaults" Flow="Vivado Synthesis 2022"/>
         <Step Id="synth_design"/>
       </Strategy>
       <GeneratedRun Dir="$PRUNDIR" File="gen_run.xml"/>
@@ -557,9 +541,7 @@
     </Run>
     <Run Id="up_proj_zynq_ultra_ps_e_0_0_synth_1" Type="Ft3:Synth" SrcSet="up_proj_zynq_ultra_ps_e_0_0" Part="xczu7ev-ffvc1156-2-e" ConstrsSet="up_proj_zynq_ultra_ps_e_0_0" Description="Vivado Synthesis Defaults" AutoIncrementalCheckpoint="false" WriteIncrSynthDcp="false" Dir="$PRUNDIR/up_proj_zynq_ultra_ps_e_0_0_synth_1" IncludeInArchive="true" IsChild="false" AutoIncrementalDir="$PSRCDIR/utils_1/imports/up_proj_zynq_ultra_ps_e_0_0_synth_1" AutoRQSDir="$PSRCDIR/utils_1/imports/up_proj_zynq_ultra_ps_e_0_0_synth_1">
       <Strategy Version="1" Minor="2">
-        <StratHandle Name="Vivado Synthesis Defaults" Flow="Vivado Synthesis 2022">
-          <Desc>Vivado Synthesis Defaults</Desc>
-        </StratHandle>
+        <StratHandle Name="Vivado Synthesis Defaults" Flow="Vivado Synthesis 2022"/>
         <Step Id="synth_design"/>
       </Strategy>
       <GeneratedRun Dir="$PRUNDIR" File="gen_run.xml"/>
@@ -569,9 +551,7 @@
     </Run>
     <Run Id="up_proj_axi_dma_0_0_synth_1" Type="Ft3:Synth" SrcSet="up_proj_axi_dma_0_0" Part="xczu7ev-ffvc1156-2-e" ConstrsSet="up_proj_axi_dma_0_0" Description="Vivado Synthesis Defaults" AutoIncrementalCheckpoint="false" WriteIncrSynthDcp="false" Dir="$PRUNDIR/up_proj_axi_dma_0_0_synth_1" IncludeInArchive="true" IsChild="false" AutoIncrementalDir="$PSRCDIR/utils_1/imports/up_proj_axi_dma_0_0_synth_1" AutoRQSDir="$PSRCDIR/utils_1/imports/up_proj_axi_dma_0_0_synth_1">
       <Strategy Version="1" Minor="2">
-        <StratHandle Name="Vivado Synthesis Defaults" Flow="Vivado Synthesis 2022">
-          <Desc>Vivado Synthesis Defaults</Desc>
-        </StratHandle>
+        <StratHandle Name="Vivado Synthesis Defaults" Flow="Vivado Synthesis 2022"/>
         <Step Id="synth_design"/>
       </Strategy>
       <GeneratedRun Dir="$PRUNDIR" File="gen_run.xml"/>
@@ -581,7 +561,9 @@
     </Run>
     <Run Id="impl_1" Type="Ft2:EntireDesign" Part="xczu7ev-ffvc1156-2-e" ConstrsSet="constrs_1" Description="Default settings for Implementation." AutoIncrementalCheckpoint="false" WriteIncrSynthDcp="false" State="current" Dir="$PRUNDIR/impl_1" SynthRun="synth_1" IncludeInArchive="true" IsChild="false" GenFullBitstream="true" AutoIncrementalDir="$PPRDIR/up_proj_gemm.srcs/utils_1/imports/impl_1" AutoRQSDir="$PPRDIR/up_proj_gemm.srcs/utils_1/imports/impl_1">
       <Strategy Version="1" Minor="2">
-        <StratHandle Name="Vivado Implementation Defaults" Flow="Vivado Implementation 2022"/>
+        <StratHandle Name="Vivado Implementation Defaults" Flow="Vivado Implementation 2022">
+          <Desc>Default settings for Implementation.</Desc>
+        </StratHandle>
         <Step Id="init_design"/>
         <Step Id="opt_design" PreStepTclHook="$PPRDIR/constr/drc_relax_pre.tcl"/>
         <Step Id="power_opt_design"/>
@@ -599,9 +581,7 @@
     </Run>
     <Run Id="fp32_add_ip_impl_1" Type="Ft2:EntireDesign" Part="xczu7ev-ffvc1156-2-e" ConstrsSet="fp32_add_ip" Description="Default settings for Implementation." AutoIncrementalCheckpoint="false" WriteIncrSynthDcp="false" SynthRun="fp32_add_ip_synth_1" IncludeInArchive="false" IsChild="false" GenFullBitstream="true" AutoIncrementalDir="$PSRCDIR/utils_1/imports/fp32_add_ip_impl_1" AutoRQSDir="$PSRCDIR/utils_1/imports/fp32_add_ip_impl_1">
       <Strategy Version="1" Minor="2">
-        <StratHandle Name="Vivado Implementation Defaults" Flow="Vivado Implementation 2022">
-          <Desc>Default settings for Implementation.</Desc>
-        </StratHandle>
+        <StratHandle Name="Vivado Implementation Defaults" Flow="Vivado Implementation 2022"/>
         <Step Id="init_design"/>
         <Step Id="opt_design"/>
         <Step Id="power_opt_design"/>
@@ -618,9 +598,7 @@
     </Run>
     <Run Id="fp32_mul_ip_impl_1" Type="Ft2:EntireDesign" Part="xczu7ev-ffvc1156-2-e" ConstrsSet="fp32_mul_ip" Description="Default settings for Implementation." AutoIncrementalCheckpoint="false" WriteIncrSynthDcp="false" SynthRun="fp32_mul_ip_synth_1" IncludeInArchive="false" IsChild="false" GenFullBitstream="true" AutoIncrementalDir="$PSRCDIR/utils_1/imports/fp32_mul_ip_impl_1" AutoRQSDir="$PSRCDIR/utils_1/imports/fp32_mul_ip_impl_1">
       <Strategy Version="1" Minor="2">
-        <StratHandle Name="Vivado Implementation Defaults" Flow="Vivado Implementation 2022">
-          <Desc>Default settings for Implementation.</Desc>
-        </StratHandle>
+        <StratHandle Name="Vivado Implementation Defaults" Flow="Vivado Implementation 2022"/>
         <Step Id="init_design"/>
         <Step Id="opt_design"/>
         <Step Id="power_opt_design"/>
@@ -637,9 +615,7 @@
     </Run>
     <Run Id="up_proj_axis_route2_0_0_impl_1" Type="Ft2:EntireDesign" Part="xczu7ev-ffvc1156-2-e" ConstrsSet="up_proj_axis_route2_0_0" Description="Default settings for Implementation." AutoIncrementalCheckpoint="false" WriteIncrSynthDcp="false" SynthRun="up_proj_axis_route2_0_0_synth_1" IncludeInArchive="false" IsChild="false" GenFullBitstream="true" AutoIncrementalDir="$PSRCDIR/utils_1/imports/up_proj_axis_route2_0_0_impl_1" AutoRQSDir="$PSRCDIR/utils_1/imports/up_proj_axis_route2_0_0_impl_1">
       <Strategy Version="1" Minor="2">
-        <StratHandle Name="Vivado Implementation Defaults" Flow="Vivado Implementation 2022">
-          <Desc>Default settings for Implementation.</Desc>
-        </StratHandle>
+        <StratHandle Name="Vivado Implementation Defaults" Flow="Vivado Implementation 2022"/>
         <Step Id="init_design"/>
         <Step Id="opt_design"/>
         <Step Id="power_opt_design"/>
@@ -656,9 +632,7 @@
     </Run>
     <Run Id="up_proj_puf_dec_bd_0_0_impl_1" Type="Ft2:EntireDesign" Part="xczu7ev-ffvc1156-2-e" ConstrsSet="up_proj_puf_dec_bd_0_0" Description="Default settings for Implementation." AutoIncrementalCheckpoint="false" WriteIncrSynthDcp="false" SynthRun="up_proj_puf_dec_bd_0_0_synth_1" IncludeInArchive="false" IsChild="false" GenFullBitstream="true" AutoIncrementalDir="$PSRCDIR/utils_1/imports/up_proj_puf_dec_bd_0_0_impl_1" AutoRQSDir="$PSRCDIR/utils_1/imports/up_proj_puf_dec_bd_0_0_impl_1">
       <Strategy Version="1" Minor="2">
-        <StratHandle Name="Vivado Implementation Defaults" Flow="Vivado Implementation 2022">
-          <Desc>Default settings for Implementation.</Desc>
-        </StratHandle>
+        <StratHandle Name="Vivado Implementation Defaults" Flow="Vivado Implementation 2022"/>
         <Step Id="init_design"/>
         <Step Id="opt_design"/>
         <Step Id="power_opt_design"/>
@@ -675,9 +649,7 @@
     </Run>
     <Run Id="up_proj_smartconnect_0_0_impl_1" Type="Ft2:EntireDesign" Part="xczu7ev-ffvc1156-2-e" ConstrsSet="up_proj_smartconnect_0_0" Description="Default settings for Implementation." AutoIncrementalCheckpoint="false" WriteIncrSynthDcp="false" SynthRun="up_proj_smartconnect_0_0_synth_1" IncludeInArchive="false" IsChild="false" GenFullBitstream="true" AutoIncrementalDir="$PSRCDIR/utils_1/imports/up_proj_smartconnect_0_0_impl_1" AutoRQSDir="$PSRCDIR/utils_1/imports/up_proj_smartconnect_0_0_impl_1">
       <Strategy Version="1" Minor="2">
-        <StratHandle Name="Vivado Implementation Defaults" Flow="Vivado Implementation 2022">
-          <Desc>Default settings for Implementation.</Desc>
-        </StratHandle>
+        <StratHandle Name="Vivado Implementation Defaults" Flow="Vivado Implementation 2022"/>
         <Step Id="init_design"/>
         <Step Id="opt_design"/>
         <Step Id="power_opt_design"/>
@@ -694,9 +666,7 @@
     </Run>
     <Run Id="up_proj_rst_ps8_0_99M_0_impl_1" Type="Ft2:EntireDesign" Part="xczu7ev-ffvc1156-2-e" ConstrsSet="up_proj_rst_ps8_0_99M_0" Description="Default settings for Implementation." AutoIncrementalCheckpoint="false" WriteIncrSynthDcp="false" SynthRun="up_proj_rst_ps8_0_99M_0_synth_1" IncludeInArchive="false" IsChild="false" GenFullBitstream="true" AutoIncrementalDir="$PSRCDIR/utils_1/imports/up_proj_rst_ps8_0_99M_0_impl_1" AutoRQSDir="$PSRCDIR/utils_1/imports/up_proj_rst_ps8_0_99M_0_impl_1">
       <Strategy Version="1" Minor="2">
-        <StratHandle Name="Vivado Implementation Defaults" Flow="Vivado Implementation 2022">
-          <Desc>Default settings for Implementation.</Desc>
-        </StratHandle>
+        <StratHandle Name="Vivado Implementation Defaults" Flow="Vivado Implementation 2022"/>
         <Step Id="init_design"/>
         <Step Id="opt_design"/>
         <Step Id="power_opt_design"/>
@@ -713,9 +683,7 @@
     </Run>
     <Run Id="up_proj_puf_bd_0_0_impl_1" Type="Ft2:EntireDesign" Part="xczu7ev-ffvc1156-2-e" ConstrsSet="up_proj_puf_bd_0_0" Description="Default settings for Implementation." AutoIncrementalCheckpoint="false" WriteIncrSynthDcp="false" SynthRun="up_proj_puf_bd_0_0_synth_1" IncludeInArchive="false" IsChild="false" GenFullBitstream="true" AutoIncrementalDir="$PSRCDIR/utils_1/imports/up_proj_puf_bd_0_0_impl_1" AutoRQSDir="$PSRCDIR/utils_1/imports/up_proj_puf_bd_0_0_impl_1">
       <Strategy Version="1" Minor="2">
-        <StratHandle Name="Vivado Implementation Defaults" Flow="Vivado Implementation 2022">
-          <Desc>Default settings for Implementation.</Desc>
-        </StratHandle>
+        <StratHandle Name="Vivado Implementation Defaults" Flow="Vivado Implementation 2022"/>
         <Step Id="init_design"/>
         <Step Id="opt_design"/>
         <Step Id="power_opt_design"/>
@@ -732,9 +700,7 @@
     </Run>
     <Run Id="up_proj_gemm_up_proj_bd_0_0_impl_1" Type="Ft2:EntireDesign" Part="xczu7ev-ffvc1156-2-e" ConstrsSet="up_proj_gemm_up_proj_bd_0_0" Description="Default settings for Implementation." AutoIncrementalCheckpoint="false" WriteIncrSynthDcp="false" SynthRun="up_proj_gemm_up_proj_bd_0_0_synth_1" IncludeInArchive="false" IsChild="false" GenFullBitstream="true" AutoIncrementalDir="$PSRCDIR/utils_1/imports/up_proj_gemm_up_proj_bd_0_0_impl_1" AutoRQSDir="$PSRCDIR/utils_1/imports/up_proj_gemm_up_proj_bd_0_0_impl_1">
       <Strategy Version="1" Minor="2">
-        <StratHandle Name="Vivado Implementation Defaults" Flow="Vivado Implementation 2022">
-          <Desc>Default settings for Implementation.</Desc>
-        </StratHandle>
+        <StratHandle Name="Vivado Implementation Defaults" Flow="Vivado Implementation 2022"/>
         <Step Id="init_design"/>
         <Step Id="opt_design"/>
         <Step Id="power_opt_design"/>
@@ -751,9 +717,7 @@
     </Run>
     <Run Id="up_proj_smartconnect_1_0_impl_1" Type="Ft2:EntireDesign" Part="xczu7ev-ffvc1156-2-e" ConstrsSet="up_proj_smartconnect_1_0" Description="Default settings for Implementation." AutoIncrementalCheckpoint="false" WriteIncrSynthDcp="false" SynthRun="up_proj_smartconnect_1_0_synth_1" IncludeInArchive="false" IsChild="false" GenFullBitstream="true" AutoIncrementalDir="$PSRCDIR/utils_1/imports/up_proj_smartconnect_1_0_impl_1" AutoRQSDir="$PSRCDIR/utils_1/imports/up_proj_smartconnect_1_0_impl_1">
       <Strategy Version="1" Minor="2">
-        <StratHandle Name="Vivado Implementation Defaults" Flow="Vivado Implementation 2022">
-          <Desc>Default settings for Implementation.</Desc>
-        </StratHandle>
+        <StratHandle Name="Vivado Implementation Defaults" Flow="Vivado Implementation 2022"/>
         <Step Id="init_design"/>
         <Step Id="opt_design"/>
         <Step Id="power_opt_design"/>
@@ -770,9 +734,7 @@
     </Run>
     <Run Id="up_proj_zynq_ultra_ps_e_0_0_impl_1" Type="Ft2:EntireDesign" Part="xczu7ev-ffvc1156-2-e" ConstrsSet="up_proj_zynq_ultra_ps_e_0_0" Description="Default settings for Implementation." AutoIncrementalCheckpoint="false" WriteIncrSynthDcp="false" SynthRun="up_proj_zynq_ultra_ps_e_0_0_synth_1" IncludeInArchive="false" IsChild="false" GenFullBitstream="true" AutoIncrementalDir="$PSRCDIR/utils_1/imports/up_proj_zynq_ultra_ps_e_0_0_impl_1" AutoRQSDir="$PSRCDIR/utils_1/imports/up_proj_zynq_ultra_ps_e_0_0_impl_1">
       <Strategy Version="1" Minor="2">
-        <StratHandle Name="Vivado Implementation Defaults" Flow="Vivado Implementation 2022">
-          <Desc>Default settings for Implementation.</Desc>
-        </StratHandle>
+        <StratHandle Name="Vivado Implementation Defaults" Flow="Vivado Implementation 2022"/>
         <Step Id="init_design"/>
         <Step Id="opt_design"/>
         <Step Id="power_opt_design"/>
@@ -789,9 +751,7 @@
     </Run>
     <Run Id="up_proj_axi_dma_0_0_impl_1" Type="Ft2:EntireDesign" Part="xczu7ev-ffvc1156-2-e" ConstrsSet="up_proj_axi_dma_0_0" Description="Default settings for Implementation." AutoIncrementalCheckpoint="false" WriteIncrSynthDcp="false" SynthRun="up_proj_axi_dma_0_0_synth_1" IncludeInArchive="false" IsChild="false" GenFullBitstream="true" AutoIncrementalDir="$PSRCDIR/utils_1/imports/up_proj_axi_dma_0_0_impl_1" AutoRQSDir="$PSRCDIR/utils_1/imports/up_proj_axi_dma_0_0_impl_1">
       <Strategy Version="1" Minor="2">
-        <StratHandle Name="Vivado Implementation Defaults" Flow="Vivado Implementation 2022">
-          <Desc>Default settings for Implementation.</Desc>
-        </StratHandle>
+        <StratHandle Name="Vivado Implementation Defaults" Flow="Vivado Implementation 2022"/>
         <Step Id="init_design"/>
         <Step Id="opt_design"/>
         <Step Id="power_opt_design"/>

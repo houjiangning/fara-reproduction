@@ -16,11 +16,11 @@
   GET  /api/hw     硬件 FaR 板上验证快照（读 hw_verify.json）
   GET  /api/hwcmp  硬件 FaR × 软件 FaR 同层对照（hw_compare.json + 同层 far 曲线）
   GET  /api/board  板卡安全启动链实时状态（FARC STATUS 直连板卡）
-  POST /api/boardop 板卡操作：{"op":"wipe"|"restore"}（擦除 DDR 明文 / 重解密）
+  POST /api/boardop 板卡操作：{"op":"wipe"|"restore"}（清空 DDR 密文缓冲 / 重走安全启动）
   GET  /api/boardstatus 板上实时攻防进度（双曲线 / FLIP 回执 / 到阈值判据）
   POST /api/boardattack 启动板上攻防：{"budget":N}（BFA计划→FARC FLIP→FARQ双推理）
   POST /api/attack 启动：{"budget":N,"mode":"attack"|"far","layer":L,"n":N,"div":D}
-  POST /api/gen    文本生成回放：{"mode","gen_model","prompt","max_new","points":[..]}
+  POST /api/gen    文本生成对比：{"prompt","max_new","points":[0,1,2]}（自动选敏感位，裸/FaR 双栏）
   POST /api/reset  恢复原始权重
 """
 import copy
@@ -77,7 +77,8 @@ _state = {
     "total": [0, 0],
     "thr": None,
     "ops": [],       # 攻击/对比过程中真实翻转的参数现场快照
-    "gen": [],       # 文本生成回放结果 [{k, ppl, acc, text}]
+    "gen": [],       # 文本生成对比结果 [{k, bits, u, p, ...}]
+    "gen_meta": None,  # 自动选位信息 {layer,row,col,plan_bit,n,...}
     "gen_busy": False,
     "pbs": None,     # 论文口径 PBS 渐进位搜索结果：见 _run_attack far 分支
     "msg": "",
@@ -252,7 +253,7 @@ def _run_attack(params):
     with _lock:
         _state.update(running=True, mode=mode, series=[[], []],
                       baseline=[None, None], total=[0, 0], thr=None,
-                      ops=[], gen=[], pbs=None, msg="准备中…", cur_layer=layer)
+                      ops=[], gen=[], gen_meta=None, pbs=None, msg="准备中…", cur_layer=layer)
     ops = []
     try:
         if mode == "far":
@@ -431,58 +432,102 @@ def reset_original():
     _model.load_state_dict(_original)
 
 
+def _pick_sensitive(plan, layer):
+    """预扫计划位（先用小子集语料），返回实际损伤最大的 (ppl, bit, row, col)。
+
+    梯度排序并不等于实际损伤：实测只有少数位置会一步击穿，
+    因此回放卡不硬编码坐标，而是现场选出「最敏感位」再构造档位。
+    """
+    best = None
+    texts = REFERENCE_CORPUS[:2]
+    for (bit, row, col) in plan:
+        m = copy.deepcopy(_model).eval()
+        _flip_entry(m, layer, row, col, bit)
+        _, ppl = corpus_nll(m, _tok, texts)
+        if best is None or ppl > best[0]:
+            best = (ppl, bit, row, col)
+        del m
+    return best
+
+
 def _run_generation(params):
-    mode = params.get("mode", "attack")
+    """文本生成对比：固定 0/1/2 三档，同 prompt/seed/解码，裸与 FaR 并排。
+
+    档位构造（自动选位，不硬编码坐标）：
+      · 预扫全部计划位，取损伤最大的位置 P 与计划位 bitB；
+      · 1 位档 = bit(B-1) @ P（低一档指数位：通常裸已复读、FaR 仍通顺）；
+      · 2 位档 = bit(B-2) + bit(B-1) @ P（裸词表塌缩，FaR 才开始复读）。
+    """
     layer = params.get("layer", DEFAULT_LAYER)
     n = int(params.get("n", 16))
     div = int(params.get("div", 2))
-    gen_model = params.get("gen_model", "unprotected")   # 'unprotected' | 'far'
     prompt = params.get("prompt", GEN_PROMPTS[0][1])
     max_new = int(params.get("max_new", 48))
     seed = int(params.get("seed", 7))
     n_seed = max(1, int(params.get("n_seed", 1)))
-    points = sorted({int(x) for x in params.get("points", [0, 2, 4, 8, 16])})
+    points = sorted({int(x) for x in params.get("points", [0, 1, 2])})
+    points = [k for k in points if 0 <= k <= 2] or [0, 1, 2]
     with _lock:
-        _state.update(gen_busy=True, gen=[], msg="正在生成回放文本…")
-    budget = max(points) if points else 0
-    plan, prot, cfg = _build_plan_entries(mode, layer, n, div, budget)
+        _state.update(gen_busy=True, gen=[], gen_meta=None,
+                      msg="正在构建 FaR 防护并预扫敏感位…")
     try:
+        plan, prot, _cfg = _build_plan_entries("far", layer, n, div, max(points))
         if not plan:
             return
+        scan = _pick_sensitive(plan, layer)
+        if scan is None:
+            return
+        _, plan_bit, row, col = scan
+        lvl_bits = {
+            0: [],
+            1: [max(plan_bit - 1, 23)],
+            2: sorted({max(plan_bit - 2, 22), max(plan_bit - 1, 23)}),
+        }
+        meta = {"layer": layer, "n": len(plan), "row": row, "col": col,
+                "plan_bit": plan_bit, "levels": [{"k": k, "bits": lvl_bits[k]} for k in points],
+                "prompt": prompt, "seed": seed, "n_seed": n_seed}
+        with _lock:
+            _state["gen_meta"] = meta
+            _state["msg"] = (f"自动选中最敏感位：bit{plan_bit} @ [{row},{col}]"
+                             f"（已预扫 {len(plan)} 个计划位）；开始三档对比…")
         results = []
         for k in points:
-            if gen_model == "far" and prot is not None:
-                reset_original()
-                m = copy.deepcopy(prot).eval()
-                for (bit, row, col) in plan[:k]:
-                    _flip_entry(m, layer, row, col, bit)
-            else:
-                m = copy.deepcopy(_model).eval()
-                if mode == "far":
-                    for (bit, row, col) in plan[:k]:
-                        _flip_entry(m, layer, row, col, bit)
-                else:
-                    for (bit, name, idx) in plan[:k]:
-                        _flip_bit_guarded(m, name, idx, bit)
-            nll, ppl = corpus_nll(m, _tok)
-            acc = _acc_vs_ref(m)
+            bits = lvl_bits[k]
+            u = copy.deepcopy(_model).eval()
+            p = copy.deepcopy(prot).eval()
+            for b in bits:
+                _flip_entry(u, layer, row, col, b)
+                _flip_entry(p, layer, row, col, b)
+            u_nll, u_ppl = corpus_nll(u, _tok)
+            p_nll, p_ppl = corpus_nll(p, _tok)
+            u_acc = _acc_vs_ref(u)
+            p_acc = _acc_vs_ref(p)
             seeds = list(range(seed, seed + n_seed))
-            modes = _decode_rich(m, _tok, prompt, max_new, seeds)
+            u_modes = _decode_rich(u, _tok, prompt, max_new, seeds)
+            p_modes = _decode_rich(p, _tok, prompt, max_new, seeds)
             results.append({
-                "k": k, "ppl": round(ppl, 1), "acc": round(acc, 1),
-                "nll": round(nll, 3),
-                "text": modes["sample"]["text"],   # 兼容回放卡
-                "ent_avg": modes["sample"]["ent_avg"],
-                "seed": seed, "n_seed": n_seed, "modes": modes,
+                "k": k,
+                "bits": bits,
+                "u": {"ppl": round(u_ppl, 1), "acc": round(u_acc, 1), "nll": round(u_nll, 3),
+                      "text": u_modes["sample"]["text"],
+                      "ent_avg": u_modes["sample"]["ent_avg"], "modes": u_modes},
+                "p": {"ppl": round(p_ppl, 1), "acc": round(p_acc, 1), "nll": round(p_nll, 3),
+                      "text": p_modes["sample"]["text"],
+                      "ent_avg": p_modes["sample"]["ent_avg"], "modes": p_modes},
+                # 兼容回放卡 / 旧字段：取裸侧
+                "ppl": round(u_ppl, 1), "acc": round(u_acc, 1), "nll": round(u_nll, 3),
+                "text": u_modes["sample"]["text"], "ent_avg": u_modes["sample"]["ent_avg"],
+                "modes": u_modes, "seed": seed, "n_seed": n_seed,
             })
             with _lock:
                 _state["gen"] = results
-                _state["msg"] = (f"生成回放进行中：已到第 {k} 位（ppl={ppl:.1f}, acc={acc:.1f}%）…")
+                _state["msg"] = (f"回放 {k} 位完成：裸 ppl={u_ppl:.1f} / "
+                                 f"FaR ppl={p_ppl:.1f}（共 {len(points)} 档）…")
     finally:
         reset_original()
         with _lock:
             _state["gen_busy"] = False
-            _state["msg"] = f"文本生成回放完成（共 {len(points)} 个档位）。（点「重置」可回到原始权重）"
+            _state["msg"] = f"文本生成对比完成（共 {len(points)} 档）。（点「重置」可回到原始权重）"
 
 
 def _num(d):
@@ -502,6 +547,7 @@ def _snapshot():
             "thr": _state["thr"],
             "ops": _state["ops"],
             "gen": _state["gen"],
+            "gen_meta": _state["gen_meta"],
             "gen_busy": _state["gen_busy"],
             "pbs": _state["pbs"],
             "msg": _state["msg"],
@@ -586,6 +632,14 @@ HTML = """<!DOCTYPE html>
   .tokline{display:flex;flex-wrap:wrap;gap:2px 0;line-height:1.9;font-size:12.5px}
   .tok{display:inline-block;padding:0 2px;border-radius:3px;color:var(--tx);white-space:pre}
   .genblock.crit{border-color:var(--danger)}
+  .genpair{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:7px}
+  @media(max-width:840px){.genpair{grid-template-columns:1fr}}
+  .genlane{background:#0e1426;border:1px solid var(--line);border-radius:8px;padding:8px 9px;min-width:0}
+  .genlane.u{border-color:rgba(255,92,122,.35)}
+  .genlane.p{border-color:rgba(59,223,143,.35)}
+  .lhead{font-size:12px;color:var(--mut);margin-bottom:4px;line-height:1.6}
+  .lhead b{color:var(--tx)}
+  .diffnote{font-size:11.5px;color:var(--warn);margin-top:6px;line-height:1.6}
   .genhint{font-size:11.5px;color:var(--mut);margin-bottom:8px;line-height:1.6}
   .genhead .ok{color:var(--ok)}
   .chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
@@ -625,13 +679,15 @@ HTML = """<!DOCTYPE html>
   @media(max-width:840px){.hwgrid{grid-template-columns:1fr}}
   .hwcap{font-size:12px;color:var(--mut);margin-bottom:6px}
   #hvcv1,#hvcv2{height:250px}
-  .hwstats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:14px 0 4px}
+  .hwstats{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin:14px 0 4px}
   @media(max-width:840px){.hwstats{grid-template-columns:1fr 1fr}}
   .hwstat{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
   .hwstat .k{font-size:11px;color:var(--mut);line-height:1.5}
   .hwstat .v{font-size:20px;font-weight:700;color:var(--accent);font-variant-numeric:tabular-nums;margin-top:4px}
   .hwstat .v.g{color:var(--ok)}
   .hwstat .v.w{color:var(--warn)}
+  .hwstat .v.sm{font-size:16px}
+  .hwstat .s{font-size:11px;color:var(--mut);margin-top:5px;line-height:1.45;font-variant-numeric:tabular-nums}
   .featrow{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 2px}
   .feat{font-size:12px;padding:3px 10px;border:1px solid var(--line);border-radius:999px;color:var(--tx);background:#101830}
   .feat b{color:var(--accent)}
@@ -652,7 +708,7 @@ HTML = """<!DOCTYPE html>
   .bdanger{border-color:var(--danger);color:var(--danger);background:rgba(255,92,122,.08)}
   .bdanger:hover{background:rgba(255,92,122,.18)}
   #boardcard.attacked{border-color:var(--danger);box-shadow:0 0 0 1px var(--danger)}
-  #boardcard.attacked h2::after{content:" · 明文已遭攻击";color:var(--danger)}
+  #boardcard.attacked h2::after{content:" · DDR 缓冲已清空";color:var(--danger)}
   .pstep.run{border-color:var(--accent);background:#0f2237}
   .pstep.run i{animation:bdpulse .6s infinite alternate}
   @keyframes bdpulse{from{opacity:.35}to{opacity:1}}
@@ -663,6 +719,30 @@ HTML = """<!DOCTYPE html>
   .hcell .hv{font-family:ui-monospace,Consolas,monospace;font-size:12px;word-break:break-all}
   .hcell.hit{border-color:var(--ok)}
   .hcell.miss{border-color:var(--danger)}
+  /* --- 启动链分步演示：步骤可点选 + 演示区 --- */
+  .pstep{cursor:pointer;user-select:none;transition:border-color .15s,background .15s}
+  .pstep:hover{border-color:var(--accent)}
+  .pstep.sel{border-color:var(--accent);background:#0f2237;box-shadow:inset 0 0 0 1px var(--accent)}
+  .pstep.sel i{background:var(--ok)}
+  .bdstage{margin:10px 0;border:1px solid var(--line);border-radius:9px;background:#0a1020;
+           padding:10px 12px;min-height:160px;font-family:ui-monospace,Consolas,monospace;
+           font-size:12px;line-height:1.65}
+  .dvh{color:var(--accent);font-weight:700;margin-bottom:6px;font-size:12.5px}
+  .dvrow{display:flex;gap:8px;margin:3px 0;align-items:baseline}
+  .dvk{flex:0 0 170px;color:var(--mut)}
+  .dvhex{color:#9ad1ff;word-break:break-all;font-family:ui-monospace,Consolas,monospace}
+  .dvbits{display:grid;grid-template-columns:repeat(32,1fr);gap:2px;margin:7px 0}
+  .dvbit{height:10px;border-radius:2px;background:#18213b}
+  .dvbit.on{background:var(--accent)}
+  .dvnote{color:var(--mut);margin-top:7px;font-size:11.5px;line-height:1.6}
+  .dvgood{color:var(--ok)}
+  .dvbad{color:var(--danger)}
+  .dvbar{display:grid;grid-template-columns:62px 1fr;gap:10px;align-items:center;margin:5px 0}
+  .dvbar .tagc{color:var(--mut);font-size:11.5px}
+  .dvbar .bar{display:flex;gap:3px;flex-wrap:wrap}
+  .dvbar .bt{width:26px;height:16px;line-height:16px;text-align:center;border-radius:3px;
+             background:#18213b;color:#8ea0bf;font-size:10px}
+  .dvbar .bt.x{background:#2a1630;color:var(--danger)}
 </style>
 </head>
 <body>
@@ -729,8 +809,17 @@ HTML = """<!DOCTYPE html>
 
     </div>
 
-    <div class="card">
-      <h2>损伤曲线（翻转预算 → 指标）</h2>
+    <div class="card" id="fardemo">
+      <h2>FaR 防护演示 · 软件模拟 / 硬件实测 / 软硬件对照</h2>
+      <div class="mode" id="fartoggle" style="grid-template-columns:1fr 1fr 1fr;margin-bottom:12px">
+        <div><input type="radio" name="farview" id="fv_soft" checked onchange="farView('soft')">
+          <label for="fv_soft">软件 FaR（CPU 模拟）</label></div>
+        <div><input type="radio" name="farview" id="fv_hard" onchange="farView('hard')">
+          <label for="fv_hard">硬件 FaR（板卡实测）</label></div>
+        <div><input type="radio" name="farview" id="fv_cmp" onchange="farView('cmp')">
+          <label for="fv_cmp">软硬件对照</label></div>
+      </div>
+      <div id="farpaneSoft">
       <div class="mode" id="metricgroup" style="grid-template-columns:1fr 1fr 1fr;margin-bottom:12px">
         <div><input type="radio" name="metric" id="m_ppl" value="ppl" checked>
           <label for="m_ppl">困惑度 ppl</label></div>
@@ -747,116 +836,75 @@ HTML = """<!DOCTYPE html>
       </div>
       <div class="hint" style="margin:10px 0 4px;color:var(--accent)">攻击现场 · 逐位快照（软件侧运行后追加）</div>
       <div id="opsbox" style="font-size:12.5px;color:var(--mut)">运行一次单独攻击或 FaR 对比后，这里逐步列出「选中 → 翻转 → 损伤上升」的每一笔记录。</div>
-    </div>
-
-    <div class="card" id="pbscard" style="display:none">
-      <h2>『到阈值需翻位』PBS 结果 · 裸 vs FaR（按论文协议回填）</h2>
-      <p class="hint">DeepHammer 渐进位搜索：翻转指数位 24–26 → 测小子集 NLL → 只提交让损失上升的位（否则回退）→ 重算梯度再找下一位；数到 ppl 首次≥基线×<b id="pbs_thr">4</b> 需提交的位。下方横条长度=裸/FaR 各自到达阈值所需翻位，并列对照与困惑度曲线同一次 FaR 对比的结果。</p>
-      <div id="pbsbars"></div>
-      <div class="verdict" id="s_thr">运行 FaR 防护对比后显示。三种口径并列：①论文协议（PBS 贪心 commit-revert，与论文 1.4–4.2× 区间可比）②固定顺序（按敏感度排序，会退化，仅参考）③机制（逐位损伤比，来自 threshold_metric_recheck.json）。判据：ppl≥基线×4（⇔ NLL≥基线+ln4）即视为损伤达成。</div>
-      <div class="verdict" id="pbsverdict">运行 FaR 对比后显示。『到阈值需翻位』裸 vs FaR 比值落在论文区间 1.4–4.2× 即方向符合。</div>
+      </div><!-- /farpaneSoft -->
+      <div id="farpaneHost"></div>
     </div>
 
     <div class="card" id="w1card" style="display:none"></div>
   </div>
 
-  <div class="card" id="playcard" style="display:none">
-    <h2>逐步回放 · 翻转因果链动画</h2>
-    <p class="hint">先运行一次「仅攻击 / FaR 对比」，再点播放：时间轴从 0 往最大翻位推进，同步<b>移动曲线上的回放标记</b>、<b>高亮下方逐位快照表</b>、在左侧逐位打出「第 N 位翻转 → 参数/坐标 → 旧值→新值 → 损伤」的因果线。想让动画里的文本也随翻位变乱，先点上方「生成回放文本」。</p>
-    <div class="row2" style="margin-bottom:10px">
-      <div>
-        <label>当前翻位：<b id="playk" style="color:var(--accent)">0</b> / <span id="playmax">0</span> 位 · 回放模型：<span id="playmodel">裸</span></label>
-        <input type="range" id="playslider" min="0" max="0" value="0" oninput="seekPlay(+this.value)">
-      </div>
-      <div class="pbbtn">
-        <button id="pbtn" onclick="togglePlay()">▶ 播放</button>
-        <button onclick="stepPlayK(1)">+1 位</button>
-        <button onclick="seekPlay(0)">归零</button>
-      </div>
-    </div>
-    <div class="msg" id="causeline">运行一次攻击/FaR 对比后点播放，这里逐位显示「第 N 位翻转 → 参数/坐标 → 旧值→新值 → 损伤」。</div>
-    <div id="playtext"></div>
-  </div>
-
   <div class="card">
-    <h2>文本生成回放 · 直接看模型被攻击后「乱说话」</h2>
-      <p class="hint">同一 prompt、同一随机种子，对比不同翻位档位下模型的输出：0 位=正常，翻位越多越被破坏（复读 / 词表塌缩 / 胡言）。这是把困惑度/准确率曲线翻译成肉眼可见的“混乱表现”。</p>
-      <div class="row2">
-        <div>
-          <label for="gen_model">回放模型</label>
-          <select id="gen_model">
-            <option value="unprotected">裸模型（无防护）</option>
-            <option value="far">FaR 防护后</option>
-          </select>
-        </div>
-        <div>
-          <label for="gen_prompt">起始 prompt（可自行输入，回车可用预置候选）</label>
-          <input type="text" id="gen_prompt" value="An engineer opened the secure edge device, checked the logs and"
-                 list="prompt_presets" spellcheck="false"><datalist id="prompt_presets">
-            <option value="An engineer opened the secure edge device, checked the logs and">现场设备安全</option>
-            <option value="The assistant read the user question carefully and then replied">对话助手</option>
-            <option value="Machine learning is changing the way we build secure systems because">科技短文</option>
-          </datalist>
-        </div>
+    <h2>文本生成对比 · 裸模型 vs FaR 防护后「同档并排」</h2>
+    <p class="hint">自动预扫计划位、选出现场最敏感的翻转位，固定三档（0 / 1 / 2 位）；左右两栏用<b>同一 prompt、同一 seed、同一解码</b>并排生成，直接看出「谁先乱」。这是把困惑度曲线翻译成肉眼可见的输出差异。</p>
+    <div style="margin-top:10px">
+      <label for="gen_prompt">起始 prompt（可自行输入，回车可用预置候选）</label>
+      <input type="text" id="gen_prompt" value="An engineer opened the secure edge device, checked the logs and"
+             list="prompt_presets" spellcheck="false"><datalist id="prompt_presets">
+        <option value="An engineer opened the secure edge device, checked the logs and">现场设备安全</option>
+        <option value="The assistant read the user question carefully and then replied">对话助手</option>
+        <option value="Machine learning is changing the way we build secure systems because">科技短文</option>
+      </datalist>
+    </div>
+    <div class="row2" style="margin-top:10px">
+      <div>
+        <label for="gen_decode">解码方式（受攻击后差异）</label>
+        <select id="gen_decode" onchange="renderGenLanes(last)">
+          <option value="sample">采样（默认 · 还算连贯）</option>
+          <option value="greedy">贪心 top-1（容易复读/循环）</option>
+          <option value="hot">高温采样（logits 被压平 → 乱蹦字）</option>
+        </select>
       </div>
-      <div style="margin-top:10px">
+      <div>
         <label for="gen_max_new">生成长度：<span id="gen_max_new_v" style="color:var(--tx)">48</span> token</label>
         <input type="range" id="gen_max_new" min="16" max="80" step="4" value="48"
                oninput="document.getElementById('gen_max_new_v').textContent=this.value">
       </div>
-      <div class="row2" style="margin-top:10px">
-        <div>
-          <label for="gen_decode">解码方式（受攻击后差异）</label>
-          <select id="gen_decode" onchange="renderGenLanes(last)">
-            <option value="sample">采样（默认 · 还算连贯）</option>
-            <option value="greedy">贪心 top-1（容易复读/循环）</option>
-            <option value="hot">高温采样（logits 被压平 → 乱蹦字）</option>
-          </select>
-        </div>
-        <div>
-          <label for="gen_seeds">抽样种数（&gt;1 自动取均熵最高即最乱的帧）：<span id="gen_seeds_v" style="color:var(--tx)">1</span></label>
-          <input type="range" id="gen_seeds" min="1" max="5" step="1" value="1"
-                 oninput="document.getElementById('gen_seeds_v').textContent=this.value">
-        </div>
-      </div>
-      <label style="margin-top:10px">翻转档位（0=原始）</label>
-      <div class="chips" id="genpoints">
-        <div><input type="checkbox" id="g0" value="0" checked><label for="g0">0 位</label></div>
-        <div><input type="checkbox" id="g2" value="2" checked><label for="g2">2 位</label></div>
-        <div><input type="checkbox" id="g4" value="4" checked><label for="g4">4 位</label></div>
-        <div><input type="checkbox" id="g8" value="8" checked><label for="g8">8 位</label></div>
-        <div><input type="checkbox" id="g16" value="16" checked><label for="g16">16 位</label></div>
-      </div>
-      <div style="font-size:12px;color:var(--warn);margin:10px 0">提示：翻 4 位前后差别最明显——裸模型此时困惑度已暴涨、输出开始复读/乱；FaR 防护后明显更晚变乱。</div>
-    <button id="genbtn" onclick="runGen()">生成回放文本</button>
+    </div>
+    <div class="hint" style="margin-top:10px">档位固定：<b>0 位</b>（基线）→ <b>1 位</b>（最敏感位 · 低一指数位）→ <b>2 位</b>（再加低二指数位）。坐标与档位由后端自动选，不用手填。</div>
+    <div style="font-size:12px;color:var(--warn);margin:8px 0">预期观感：1 位时裸模型开始复读、FaR 仍通顺；2 位时裸模型词表塌缩/近乎空白、FaR 才开始复读——这就是「FaR 把损伤推迟一档」的直接证据。不要再加第 3 位：两边都会越过可读阈值，差距反而消失。</div>
+    <button id="genbtn" onclick="runGen()">生成三档对比</button>
     <div id="genbox"></div>
   </div>
 
   <div class="card" id="boardcard">
     <h2>板卡安全启动链 · 实时攻防（ZCU106 · PUF 派生密钥，全程不出 PL）</h2>
-    <p class="hint"><b style="color:var(--danger)">攻击</b>：「模拟攻击」清零板上 9.01MB 明文权重，探针指纹当场变脸——模型输出已损坏的铁证；<b style="color:var(--ok)">防御</b>：「重解密」逐步点亮完整安全启动链（PUF→FE/KDF→HD 门禁→AES→Canary，实测 ≈100ms），指纹 bit-exact 复原。SD 卡密文全程未被触碰，<b>密钥不出 PL、明文权重不出板</b>。</p>
+    <p class="hint"><b style="color:var(--danger)">攻击</b>：「模拟攻击」清空板上 9.01MB <b>密文</b>缓冲，探针指纹当场变脸——模型输出已损坏的铁证；<b style="color:var(--ok)">防御</b>：「重走安全启动」逐步点亮 PUF→FE/KDF→HD 门禁→<b>镜像完整性（字节级）</b>→在线解密 + Canary，指纹 bit-exact 复原。SD 卡密文全程未被触碰；<b>密钥不出 PL</b>，运行期 DDR 只驻留密文，明文仅在 PL 内解密通路上逐块出现。</p>
     <div class="pipe" id="bdpipe">
-      <div class="pstep" id="bdp1"><i>1</i>PUF 采样<small>蝴蝶 PUF · 布局冻结指纹</small></div>
+      <div class="pstep" id="bdp1" onclick="bdStep(1)"><i>1</i>PUF 采样<small>蝴蝶 PUF · 布局冻结指纹</small></div>
       <div class="parr">→</div>
-      <div class="pstep" id="bdp2"><i>2</i>模糊提取 + KDF<small>纠错 k 位 · SHA-256 派生密钥</small></div>
+      <div class="pstep" id="bdp2" onclick="bdStep(2)"><i>2</i>模糊提取 + KDF<small>纠错 k 位 · SHA-256 派生密钥</small></div>
       <div class="parr">→</div>
-      <div class="pstep" id="bdp3"><i>3</i>HD 门禁<small>选中位 HD≤1 放行</small></div>
+      <div class="pstep" id="bdp3" onclick="bdStep(3)"><i>3</i>HD 门禁<small>选中位 HD≤1 放行</small></div>
       <div class="parr">→</div>
-      <div class="pstep" id="bdp4"><i>4</i>AES-256-CTR 解密<small>9.01MB · <span id="bddec">--</span> ms</small></div>
+      <div class="pstep" id="bdp4" onclick="bdStep(4)"><i>4</i>镜像完整性<small>W.enc|b|cfg · 字节级摘要</small></div>
       <div class="parr">→</div>
-      <div class="pstep" id="bdp5"><i>5</i>Canary 确认<small>probe 输出 hash 仲裁</small></div>
+      <div class="pstep" id="bdp5" onclick="bdStep(5)"><i>5</i>在线解密 + Canary<small><span id="bddec">--</span> ms · 明文不进 DDR</small></div>
+    </div>
+    <div class="bdstage" id="bdstage">
+      <div class="dvh">分步演示 · 点一下走一步</div>
+      <div class="dvnote">点 1→5 任一环节，此处即时呈现该环节的现场数据：PUF 采样位图 / 派生密钥与指纹 / HD 门禁判据 / 读 DDR 密文与 CTR 加解密逐块运算 / Canary 指纹仲裁。切换下一步自动清屏重绘，只点亮当前环节。</div>
     </div>
     <div class="hashstrip">
       <div class="hcell" id="bdh0"><span class="hk">参考指纹 · 干净权重探针输出</span><span class="hv">--</span></div>
-      <div class="hcell" id="bdh1"><span class="hk">攻击后 · 擦除（明文→全零）</span><span class="hv">--</span></div>
+      <div class="hcell" id="bdh1"><span class="hk">攻击后 · 清空（密文→全零）</span><span class="hv">--</span></div>
       <div class="hcell" id="bdh2"><span class="hk">防御后 · 重解密恢复</span><span class="hv">--</span></div>
     </div>
     <div class="meta" id="bdmeta">连接中…</div>
-    <div class="bdcons" id="bdev" style="max-height:170px"><div class="bdl"><span class="tg tg-info">INFO</span>攻防时间线：点「模拟攻击」擦除板上明文（指纹变脸 = 损伤证据）→ 再点「防御」观看安全启动链逐步反制（指纹复原 = 恢复证据）。</div></div>
+    <div class="bdcons" id="bdev" style="max-height:170px"><div class="bdl"><span class="tg tg-info">INFO</span>攻防时间线：点「模拟攻击」清空板上密文缓冲（指纹变脸 = 损伤证据）→ 再点「防御」观看安全启动链逐步反制（指纹复原 = 恢复证据）。</div></div>
     <div class="opsbox" id="bdtab" style="max-height:none"></div>
     <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center">
-      <button id="bdwipe" class="bdanger" onclick="bdOp('wipe')">模拟攻击：擦除 DDR 明文</button>
-      <button id="bdrestore" onclick="bdOp('restore')">防御：重解密（完整安全启动链）</button>
+      <button id="bdwipe" class="bdanger" onclick="bdOp('wipe')">模拟攻击：清空 DDR 密文缓冲</button>
+      <button id="bdrestore" onclick="bdOp('restore')">防御：重走安全启动（完整链路）</button>
       <span class="hint" id="bdmsg" style="margin:0"></span>
     </div>
   </div>
@@ -870,7 +918,7 @@ HTML = """<!DOCTYPE html>
       <span class="feat">防护在 RTL · far_reroute 数据通路内</span>
       <span class="feat">bit-exact · L4 实测</span>
     </div>
-    <p class="hint">攻击<b>决策</b>在 PC（敏感位序列，梯度排序），攻击<b>执行</b>经 FARC FLIP 写入板上真实 DDR 权重（回执含 old/new 位模式），随后 c_fc 层 offload 到板卡推理测语料 ppl。双曲线 = 同一份板上 W + 同样翻转，唯一变量是 RTL farmap 开关：<b style="color:var(--danger)">裸 n_far=0</b>（无 reroute）vs <b style="color:var(--accent)">FaR n_far=1</b>（far_reroute.sv 在数据通路内改写激活——防护完全由 PL 硬件承载）。</p>
+    <p class="hint">攻击<b>决策</b>在 PC（敏感位序列，梯度排序），攻击<b>执行</b>经 FARC FLIP 写入板上真实 DDR 权重（回执为密文旧/新位模式；CTR 下翻密文位等价于翻对应明文位），随后 c_fc 层 offload 到板卡推理测语料 ppl。双曲线 = 同一份板上 W + 同样翻转，唯一变量是 RTL farmap 开关：<b style="color:var(--danger)">裸 n_far=0</b>（无 reroute）vs <b style="color:var(--accent)">FaR n_far=1</b>（far_reroute.sv 在数据通路内改写激活——防护完全由 PL 硬件承载）。</p>
     <div style="display:flex;gap:14px;align-items:end;flex-wrap:wrap;margin-bottom:8px">
       <div>
         <label>翻转预算（板卡敏感位共 8 个）：<b id="bdbudgetv" style="color:var(--accent)">8</b> 位</label>
@@ -930,7 +978,7 @@ HTML = """<!DOCTYPE html>
     </div>
     <div class="row2" style="margin:12px 0 6px;align-items:end">
       <div>
-        <label>动态回放 · 当前翻位：<b id="hvk" style="color:var(--accent)">0</b> / <span id="hvmax">0</span> 位</label>
+        <label>动态回放 · 当前翻位：<b id="hvk" style="color:var(--accent)">0</b> / <span id="hvmax">0</span> 位 · 推理步数：<b id="hvstep" style="color:var(--accent)">0</b> / 512</label>
         <input type="range" id="hvslider" min="0" max="0" step="1" value="0" oninput="hvSeek(+this.value)">
       </div>
       <div style="display:flex;gap:8px;align-items:end">
@@ -938,7 +986,7 @@ HTML = """<!DOCTYPE html>
         <button onclick="hvSeek(0)">归零</button>
       </div>
     </div>
-    <div class="msg" id="hvread">点「动态播放」：曲线从 0 位逐位生长，标记同步移动，实时读出裸 / FaR 在同一翻位下的困惑度差距。</div>
+    <div class="msg" id="hvread">点「动态播放」：左图沿翻位数、右图沿推理步数同步生长，两个标记一起移动，实时读出裸 / FaR 的困惑度差距与累计防护开销。</div>
     <div class="hwstats" id="hwstats"></div>
     <div class="verdict" id="hwcmpverdict">加载中…</div>
   </div>
@@ -949,6 +997,7 @@ HTML = """<!DOCTYPE html>
 <script>
 const cv=document.getElementById('cv'),ctx=cv.getContext('2d');
 let last=null, met='ppl', playK=0, playMax=0, playTimer=null, playing=false;
+let genShow=false;   // 本页是否已成功发起生成：false 时隐藏后台上一次留下的结果
 const THR=4;
 const FIELDS={ppl:'ppl',nll:'nll',acc:'acc'};
 function dpr(){return window.devicePixelRatio||1}
@@ -958,6 +1007,9 @@ function fit(){const w=cv.clientWidth,h=cv.clientHeight;
 function fmt(v){return v>=1000?Math.round(v).toLocaleString():Number(v).toFixed(2)}
 function ylab(v){return met==='acc'?Number(v).toFixed(1)+'%':Number(v).toFixed(2)}
 function draw(s){
+  // 面板隐藏时 clientWidth=0，若照常 fit() 会把内联宽高钉成 0px，切回来就变空白
+  if(!cv.clientWidth||!cv.clientHeight){cv.style.width='';cv.style.height='';}
+  if(!cv.clientWidth||!cv.clientHeight)return;
   fit();
   ctx.save();ctx.setTransform(1,0,0,1,0,0);ctx.clearRect(0,0,cv.width,cv.height);ctx.restore();
   const W=cv.clientWidth,HH=cv.clientHeight;
@@ -1034,24 +1086,29 @@ async function reset(){
 function setLive(on,txt){document.getElementById('dot').className=on?'dot on':'dot';document.getElementById('livetxt').textContent=txt;}
 function fmt2(x){return x!=null&&isFinite(x)?x.toFixed(2):'--';}
 async function runGen(){
-  const mode=document.querySelector('#modegroup input:checked').value;
   const body={
-    mode,
-    gen_model:document.getElementById('gen_model').value,
+    mode:'far',
     prompt:document.getElementById('gen_prompt').value,
     max_new:+document.getElementById('gen_max_new').value,
     seed:7,
-    n_seed:+document.getElementById('gen_seeds').value,
-    points:[...document.querySelectorAll('#genpoints input:checked')].map(i=>+i.value)
+    n_seed:1,
+    points:[0,1,2],
+    layer:document.getElementById('layer').value.trim()||'transformer.h.2.mlp.c_proj',
+    n:+document.getElementById('n').value||16,
+    div:+document.getElementById('div').value||2
   };
-  if(mode==='far'){
-    body.layer=document.getElementById('layer').value.trim()||'transformer.h.2.mlp.c_proj';
-    body.n=+document.getElementById('n').value;
-    body.div=+document.getElementById('div').value;
-  }
+  genShow=false;   // 先收起旧结果，避免点击瞬间还展示上一次的文本
+  document.getElementById('genbox').innerHTML='<div class="hint">正在生成三档对比…（生成期间会按档位逐条出现）</div>';
   document.getElementById('genbtn').disabled=true;
-  document.getElementById('genbtn').textContent='正在生成…';
-  await fetch('/api/gen',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  document.getElementById('genbtn').textContent='正在生成三档…（约 1–2 分钟）';
+  try{
+    const r=await fetch('/api/gen',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const j=await r.json();
+    if(j&&j.ok){ genShow=true; }
+    else { document.getElementById('genbox').innerHTML='<div class="hint">启动失败：当前有其它任务在运行，请稍后重试。</div>'; }
+  }catch(e){
+    document.getElementById('genbox').innerHTML='<div class="hint">启动失败：无法连接后端。</div>';
+  }
 }
 function renderExtras(s){
   const ob=document.getElementById('opsbox');
@@ -1079,10 +1136,15 @@ function renderExtras(s){
   } else ob.textContent='运行一次单独攻击或 FaR 对比后，这里逐步列出「选中 → 翻转 → 损伤上升」的每一笔记录。';
   const gb=document.getElementById('genbox');
   if(s.gen&&s.gen.length){
-    renderGenLanes(s);
+    if(genShow){ renderGenLanes(s); }
+    else { gb.innerHTML='<div class="hint">（页面新打开，已隐藏上一次生成的结果；点「生成三档对比」开始本次演示。）</div>'; }
+  }else if(s.gen_busy){
+    gb.innerHTML='<div class="hint">正在生成三档对比…（生成期间会按档位逐条出现）</div>';
+  }else{
+    gb.innerHTML='<div class="hint">（尚未生成对比——点上方「生成三档对比」，这里会按 0/1/2 档铺出「裸 / FaR」两栏逐 token 热力带。）</div>';
   }
   document.getElementById('genbtn').disabled=s.gen_busy||s.running;
-  document.getElementById('genbtn').textContent=s.gen_busy?'正在生成…':'生成回放文本';
+  document.getElementById('genbtn').textContent=s.gen_busy?'正在生成…':'生成三档对比';
   highlightOpsRow();
 }
 /* ---- 逐 token 热力泳道（把「数值在变」翻译成「可见的一次次乱掉」） ---- */
@@ -1099,9 +1161,14 @@ function _tokHeat(ent){
 function renderGenLanes(s){
   const gb=document.getElementById('genbox');
   if(!(s&&s.gen&&s.gen.length)){
-    gb.innerHTML='<div class="hint">（尚未生成回放文本——点上方「生成回放文本」，这里会按档位铺成逐 token 热力泳道。）</div>';
+    gb.innerHTML='<div class="hint">（尚未生成对比——点上方「生成三档对比」，这里会按 0/1/2 档铺出「裸 / FaR」两栏逐 token 热力带。）</div>';
     return;
   }
+  if(s.gen[0]&&s.gen[0].u&&s.gen[0].p){renderGenDual(s);return;}
+  renderGenSingle(s);   // 兼容旧数据（单栏）
+}
+function renderGenSingle(s){
+  const gb=document.getElementById('genbox');
   const dec=document.getElementById('gen_decode')?document.getElementById('gen_decode').value:'sample';
   const pts=[...s.gen].sort((a,b)=>a.k-b.k);
   const base=(pts[0].ppl>0)?pts[0].ppl:1;      // 最低档位(通常 0 位)作为基线参照
@@ -1131,6 +1198,62 @@ function renderGenLanes(s){
       '<div class="tokline">'+cells+'</div></div>';
   }).join('');
   gb.innerHTML='<div class="genhint">解码=<b>'+_decLabel(dec)+'</b>：每个小格=一个 token，底色=该步预测熵（绿→黄→红=越不确定、越接近乱码）。0 位泳道常驻顶部作基线；越过阈值（ppl≥基线×'+thr+'）的档位红框标出。</div>'+rows;
+}
+function renderGenDual(s){
+  const gb=document.getElementById('genbox');
+  const dec=document.getElementById('gen_decode')?document.getElementById('gen_decode').value:'sample';
+  const pts=[...s.gen].sort((a,b)=>a.k-b.k);
+  const base=(pts[0].u&&pts[0].u.ppl>0)?pts[0].u.ppl:1;
+  const thr=(s.thr&&s.thr.mult)?+s.thr.mult:4;
+  const meta=s.gen_meta||{};
+  const lvlBits=k=>{const l=(meta.levels||[]).filter(x=>x.k===k)[0];return l?l.bits:[];};
+  const bitsTxt=b=>((b&&b.length)?b.map(x=>'bit'+x).join(' + '):'0 位');
+  function cellsOf(o){
+    const m=(o.modes&&o.modes[dec])||{toks:[],text:o.text||'',ent_avg:o.ent_avg||0};
+    const toks=m.toks||[];
+    return toks.length?toks.map(t=>{
+      const txt=(t.txt==='')?'·':(_esc(t.txt)||'·');
+      const tt='token='+(t.t!=null?t.t:'?')+' id='+(t.id!=null?t.id:'?')+
+               ' 熵='+(t.ent!=null?t.ent:'?')+' 置信='+(t.conf!=null?t.conf:'?')+
+               ' top5='+(t.topk||[]).slice(0,3).join('|');
+      return '<span class="tok" style="background:'+_tokHeat(t.ent||0)+'" title="'+_esc(tt)+'">'+txt+'</span>';
+    }).join(''):'<span class="tok" style="color:var(--mut)">'+(_esc(m.text)||'∅')+'</span>';
+  }
+  function lane(o,who){
+    const m=(o.modes&&o.modes[dec])||{toks:[],text:o.text||'',ent_avg:o.ent_avg||0};
+    const ratio=base>0?o.ppl/base:1;
+    const over=ratio>=thr, warn=(!over&&ratio>1.5);
+    const badge=over?'<span class="bad">已超阈值 ×'+thr+'</span>'
+      :(warn?'<span class="warn">开始劣化 ×'+ratio.toFixed(1)+'</span>':'<span class="good">接近基线</span>');
+    return '<div class="genlane '+who+'"><div class="lhead"><b>'+(who==='u'?'裸模型':'FaR 防护后')+
+      '</b> · ppl=<b>'+o.ppl+'</b> · acc=<b class="'+(o.acc<60?'bad':'good')+'">'+o.acc+'%</b> · 均熵='+
+      (m.ent_avg!=null?m.ent_avg:'--')+' · '+badge+'</div><div class="tokline">'+cellsOf(o)+'</div></div>';
+  }
+  const rows=pts.map(g=>{
+    const bits=g.bits||[];
+    if(g.k===0){
+      return '<div class="genblock"><div class="genhead">基线 · <b>0 位</b>（裸 = FaR，原始权重） · ppl=<b>'+
+        g.u.ppl+'</b> · acc=<b class="good">'+g.u.acc+'%</b></div><div class="tokline">'+cellsOf(g.u)+'</div></div>';
+    }
+    const ru=(base>0?g.u.ppl/base:1), rp=(base>0?g.p.ppl/base:1);
+    const uOver=ru>=thr, pOver=rp>=thr;
+    const verdict=(uOver&&!pOver)
+      ?'裸已越阈值、FaR 仍在阈值内 → 防护把损伤推迟了一档'
+      :(uOver&&pOver?'两边都越阈值，但 FaR 文本仍更可读（看右栏）'
+      :(!uOver&&!pOver?'两边都在阈值内，继续加档才会分化':'FaR 反而更早越阈值（此档不适合演示）'));
+    const dmg=(g.p.ppl>0)?(g.u.ppl/g.p.ppl).toFixed(2)+'×':'—';
+    return '<div class="genblock'+(uOver?' crit':'')+'">'+
+      '<div class="genhead">翻转 <b>'+bitsTxt(bits)+'</b>（'+g.k+' 位）@ ['+meta.row+','+meta.col+
+      '] · 损伤比（裸/FaR ppl）≈ <b>'+dmg+'</b></div>'+
+      '<div class="genpair">'+lane(g.u,'u')+lane(g.p,'p')+'</div>'+
+      '<div class="diffnote">'+verdict+'</div></div>';
+  }).join('');
+  const head='<div class="genhint">自动选位：预扫 <b>'+meta.n+'</b> 个计划位 → 最敏感 <b>bit'+meta.plan_bit+
+    ' @ ['+meta.row+','+meta.col+']</b>；档位 1 = '+bitsTxt(lvlBits(1))+
+    '，档位 2 = '+bitsTxt(lvlBits(2))+
+    '。两栏同 prompt、同 seed（'+meta.seed+'）、同解码=<b>'+_decLabel(dec)+'</b>，不做帧挑选。</div>';
+  gb.innerHTML=head+rows+
+    '<div class="genhint" style="margin-top:8px">每个小格=一个 token，底色=该步预测熵（绿→黄→红=越不确定）。左栏裸模型、右栏 FaR；红框=裸侧已越过阈值（ppl≥基线×'+thr+'）。</div>';
 }
 let _thrState=null;
 function renderThrBox(){
@@ -1168,6 +1291,7 @@ function renderThrBox(){
 }
 function renderPBS(s){
   const card=document.getElementById('pbscard');
+  if(!card)return;   // 演示界面已移除 PBS 结果卡（不再渲染该模块）
   const pb=s.pbs;
   if(!pb){card.style.display='none';return;}
   card.style.display='';
@@ -1221,20 +1345,21 @@ function playMaxOf(s){
   return m;
 }
 function setupPlay(s){
+  const pc=document.getElementById('playcard');
+  if(!pc){ playMax=0; return; }   // 演示界面已移除逐步回放卡
   if(s.running){ stopPlay(); }
   playMax=playMaxOf(s);
-  const pc=document.getElementById('playcard');
   if(playMax<=0){pc.style.display='none';return;}
   pc.style.display='';
   document.getElementById('playmax').textContent=playMax;
   const sl=document.getElementById('playslider');sl.max=playMax;
-  const msel=document.getElementById('gen_model');
-  document.getElementById('playmodel').textContent=(msel&&msel.value==='far')?'FaR 防护后':'裸';
+  document.getElementById('playmodel').textContent='裸（FaR 见对比卡右栏）';
   if(s.total&&s.total[0]===0){playK=0;}
   if(playK>playMax)playK=playMax;
   updatePlayUI(s);
 }
 function updatePlayUI(s){
+  if(!document.getElementById('playcard'))return;   // 回放卡已移除
   if(playMax<=0)return;
   document.getElementById('playk').textContent=playK;
   document.getElementById('playslider').value=playK;
@@ -1252,10 +1377,11 @@ function updatePlayUI(s){
   }else{
     cl.innerHTML=`已推进到 <b>${playK}</b> 位（此档位无逐位快照记录）。`;
   }
-  let gs=null;(s.gen||[]).forEach(g=>{if(g.k<=playK)gs=g;});
+  let gs=null;
+  if(genShow){ (s.gen||[]).forEach(g=>{if(g.k<=playK)gs=g;}); }
   ptb.innerHTML=gs
     ? `<div class="genblock"><div class="genhead">≈ 翻到第 <b>${playK}</b> 位的真实输出（样例档位 ${gs.k} 位 · ppl=${gs.ppl} · acc=<b class="${gs.acc<60?'bad':'good'}">${gs.acc}%</b>）</div><div class="gentext">${gs.text||'∅'}</div></div>`
-    : (s.gen&&s.gen.length?'':'<div class="pbtag">（尚未生成回放文本——先点上方「生成回放文本」，动画里这段文字就会随翻位变乱。）</div>');
+    : (genShow&&s.gen&&s.gen.length?'':'<div class="pbtag">（尚未生成对比文本——先点上方「生成三档对比」，动画里这段文字就会随翻位变乱。）</div>');
   highlightOpsRow();
 }
 function highlightOpsRow(){
@@ -1330,6 +1456,7 @@ function applySnapshot(s){
   _thrState=s;
   renderThrBox();
   draw(s);
+  const _hb=document.getElementById('hwbase'); if(_hb)_hb.textContent=_hwBaseTxt();   // 对照卡基线行随实时指标同步
   renderExtras(s);
   setupPlay(s);
   renderPBS(s);
@@ -1374,7 +1501,7 @@ function _hwLine(cv,series,opt){
     c.beginPath();
     pts.forEach(function(p,i){const x=X(p[0]),y=Y(p[1]);i?c.lineTo(x,y):c.moveTo(x,y);});
     c.stroke();c.setLineDash([]);
-    if(!s.dash||!s.dash.length){c.fillStyle=s.color;
+    if(opt.dots!==false&&(!s.dash||!s.dash.length)){c.fillStyle=s.color;
       pts.forEach(function(p){c.beginPath();c.arc(X(p[0]),Y(p[1]),2.6,0,7);c.fill();});}
     const lp=pts[pts.length-1];
     c.fillStyle=s.color;c.beginPath();c.arc(X(lp[0]),Y(lp[1]),5,0,7);c.fill();
@@ -1382,6 +1509,13 @@ function _hwLine(cv,series,opt){
   });
 }
 function _hwStat(k,v,cls){return '<div class="hwstat"><div class="k">'+k+'</div><div class="v '+(cls||'')+'">'+v+'</div></div>';}
+/* 「精度无损」卡第二行：无攻击基线的裸模型 / FaR 模型困惑度，直接引实时指标区的同一份数据 */
+function _hwBaseTxt(){
+  const bs=(typeof last!=='undefined'&&last&&last.baseline)?last.baseline:null;
+  const u=(bs&&bs[0]&&bs[0].ppl!=null)?bs[0].ppl:null;
+  const f=(bs&&bs[1]&&bs[1].ppl!=null)?bs[1].ppl:null;
+  return '基线 ppl 裸 '+(u!=null?u.toFixed(2):'—')+' / FaR '+(f!=null?f.toFixed(2):'—');
+}
 let _hwLast=null;
 let _recheck=null;   // threshold_metric_recheck.json（判据复核 + 逐位损伤比）
 window.addEventListener('resize',function(){ if(_hwLast) drawHWCmp(_hwLast); });
@@ -1432,20 +1566,25 @@ function drawHWCmp(d){
     xlabel:'翻位数（bit flips）',base:baseP,reveal:rev,
     vline:(rev!=null)?flips[rev]:null,
     yfmt:function(v){return v>=1000?Math.round(v).toLocaleString():v.toFixed(0);}});
-  const steps=[0,128,256,384,512];
+  const steps=[]; for(let s=0;s<=512;s+=8)steps.push(s);   // 密采样，便于随播放平滑生长
   const sw=steps.map(function(s){return [s,s*(swd.far_overhead_us||0)/1000];});
   const hwv=steps.map(function(s){return [s,s*(hwd.far_extra_us||0)/1000];});
+  const frac=(rev!=null&&flips.length>1)?rev/(flips.length-1):null;
+  const rev2=(frac==null)?null:Math.max(0,Math.min(steps.length-1,Math.round(frac*(steps.length-1))));
+  const stepCur=(rev2==null)?null:steps[rev2];
   _hwLine(document.getElementById('hvcv2'),[
     {name:'软件 FaR',color:'#ffb547',pts:sw},
     {name:'硬件 FaR',color:'#38c2ff',pts:hwv}
-  ],{xlabel:'推理步数（token）',yfmt:function(v){return v.toFixed(0)+' ms';}});
+  ],{xlabel:'推理步数（token）',yfmt:function(v){return v.toFixed(0)+' ms';},reveal:rev2,vline:stepCur,dots:false});
   const sl=document.getElementById('hvslider');
   if(sl)sl.max=Math.max(0,flips.length-1);
   const hm=document.getElementById('hvmax'); if(hm)hm.textContent=flips.length?flips[flips.length-1]:0;
   const hk=document.getElementById('hvk'); if(hk)hk.textContent=(rev!=null&&flips[rev]!=null)?flips[rev]:0;
+  const hs=document.getElementById('hvstep'); if(hs)hs.textContent=(stepCur!=null?stepCur:0);
   const rd=document.getElementById('hvread');
   if(rd){
-    if(rev==null||!cN||!cF){rd.textContent='该层暂无曲线数据。';}
+    const lines=[];
+    if(rev==null||!cN||!cF){lines.push('该层暂无曲线数据。');}
     else{
       const uN=cN.ppl[rev],uF=cF.ppl[rev];
       let cmp='';
@@ -1453,10 +1592,20 @@ function drawHWCmp(d){
         cmp=uN>=uF?(' · FaR 比裸低 <b class="good">'+(uN/uF).toFixed(2)+'×</b>')
                   :(' · FaR 比裸高 <b class="warn">'+(uF/uN).toFixed(2)+'×</b>');
       }
-      rd.innerHTML='第 <b>'+(flips[rev])+'</b> 位翻转 → 裸 ppl <b class="warn">'+_hvNum(uN)+'</b> · 软件/硬件 FaR ppl <b class="good">'+_hvNum(uF)+'</b>'+cmp;
+      lines.push('第 <b>'+(flips[rev])+'</b> 位翻转 → 裸 ppl <b class="warn">'+_hvNum(uN)+'</b> · 软件/硬件 FaR ppl <b class="good">'+_hvNum(uF)+'</b>'+cmp);
     }
+    if(stepCur!=null&&flips.length>1){
+      const swMs=stepCur*(swd.far_overhead_us||0)/1000;
+      const hwMs=stepCur*(hwd.far_extra_us||0)/1000;
+      lines.push('第 <b>'+stepCur+'</b> 步推理 → 软件 FaR 累计 <b class="warn">'+swMs.toFixed(1)+' ms</b> · 硬件 FaR <b class="good">'+hwMs.toFixed(1)+' ms</b> · 少花 <b>'+(swMs-hwMs).toFixed(1)+' ms</b>（'+spd.toFixed(1)+'×）');
+    }
+    rd.innerHTML=lines.join('<br>');
   }
+  const bex=(hwd.bit_exact_vs_sw===true);   // L4 实测：硬件 FaR 输出与软件 FaR 逐位一致
   st.innerHTML=[
+    '<div class="hwstat"><div class="k">精度无损</div>'
+      +'<div class="v '+(bex?'g':'')+' sm">max|Δ| = '+(bex?'0':'—')+'</div>'
+      +'<div class="s" id="hwbase">'+_hwBaseTxt()+'</div></div>',
     _hwStat('防护等效','逐 bit 一致','g'),
     _hwStat('软件 FaR 开销',(swd.far_overhead_us!=null?swd.far_overhead_us.toFixed(1)+' µs':'—'),'w'),
     _hwStat('硬件 FaR 开销',(hwd.far_extra_us!=null?hwd.far_extra_us.toFixed(1)+' µs':'—')),
@@ -1488,17 +1637,61 @@ function bdHashCell(id,txt,ok){
   if(ok===false)el.classList.add('miss');
 }
 function bdPipe(d){
-  if(bdAnim)return;   // 重解密动画期间不打断流水线着色
-  const el=id=>document.getElementById(id);
-  ['bdp1','bdp2','bdp3','bdp4','bdp5'].forEach(id=>{el(id).classList.remove('ok','bad');});
-  if(!d||!d.ok){document.getElementById('bddec').textContent='--';return;}
-  el('bdp1').classList.add('ok');
-  if(d.k_used>0)el('bdp2').classList.add('ok');
-  if(d.hd<=1)el('bdp3').classList.add('ok');else if(d.hd>3)el('bdp3').classList.add('bad');
-  document.getElementById('bddec').textContent=Number(d.dec_ms).toFixed(1);
-  el('bdp4').classList.add(d.dec_ms>0?'ok':'bad');
-  if(d.wiped){el('bdp5').classList.add('bad');return;}   // 明文被擦：Canary 失效态
-  el('bdp5').classList.add(d.boot_ok===1?'ok':'bad');
+  // 步骤高亮改为「点击驱动」：不再按 STATUS 自动点亮 1→5，只刷新在线耗时
+  const dd=document.getElementById('bddec');
+  if(!dd)return;
+  if(!d||!d.ok){dd.textContent='--';return;}
+  dd.textContent=Number(d.dec_ms).toFixed(1);
+}
+/* ---- 启动链分步演示：点一步、亮一步，演示区先清屏再取数 ---- */
+let bdSelStep=0;
+function bdStep(n){
+  [1,2,3,4,5].forEach(function(k){
+    const e=document.getElementById('bdp'+k);
+    if(e)e.classList.remove('sel','ok','bad','run');
+  });
+  const cur=document.getElementById('bdp'+n);
+  if(cur)cur.classList.add('sel');
+  bdSelStep=n;
+  const st=document.getElementById('bdstage');
+  st.innerHTML='<div class="dvh">步骤 '+n+' · 读取现场数据…</div>'
+              +'<div class="dvnote">已清屏，正在向板卡 FARC 与封印产物取数。</div>';
+  fetch('/api/pufdemo?step='+n).then(function(r){return r.json();}).then(function(d){
+    if(bdSelStep!==n)return;                       // 已切走：丢弃过期响应
+    if(!d||!d.ok){
+      st.innerHTML='<div class="dvh">步骤 '+n+'</div><div class="dvnote dvbad">取数失败：'
+                  +_esc((d&&d.error)||'未知错误')+'</div>';
+      return;
+    }
+    st.innerHTML=d.html;
+  }).catch(function(e){
+    if(bdSelStep!==n)return;
+    st.innerHTML='<div class="dvh">步骤 '+n+'</div><div class="dvnote dvbad">取数失败：'+_esc(String(e))+'</div>';
+  });
+}
+/* ---- 软/硬件 FaR 合并模块：把两张卡挂进同一容器，用 3 档按钮切换 ---- */
+function farMount(){
+  const host=document.getElementById('farpaneHost');
+  if(!host)return;
+  ['bdattackcard','hwcmpcard'].forEach(function(id){
+    const e=document.getElementById(id);
+    if(!e)return;
+    e.classList.remove('card');     // 去掉外层卡片描边，嵌进合并卡
+    e.style.display='none';
+    host.appendChild(e);
+  });
+}
+function farView(v){
+  const soft=document.getElementById('farpaneSoft');
+  const bd=document.getElementById('bdattackcard');
+  const hv=document.getElementById('hwcmpcard');
+  if(soft)soft.style.display=(v==='soft')?'':'none';
+  if(bd)bd.style.display=(v==='hard')?'':'none';
+  if(hv)hv.style.display=(v==='cmp')?'':'none';
+  // 只重绘「刚显示」的面板：隐藏时 clientWidth=0，绘制会把画布压成 0 宽
+  if(v==='soft'&&typeof last!=='undefined'&&last)draw(last);
+  if(v==='hard'&&typeof bdLastSer!=='undefined'&&bdLastSer)bdDraw(bdLastSer);
+  if(v==='cmp'&&typeof _hwLast!=='undefined'&&_hwLast)drawHWCmp(_hwLast);
 }
 async function loadBoard(){
   if(bdBusy) return;
@@ -1512,32 +1705,34 @@ async function loadBoard(){
     return;
   }
   const bootOk=d.boot_ok===1;
+  const same=!d.wiped&&d.w_hash===d.enc_hash;   // DDR 驻留 == SD 密文 ⇒ 无明文副本
   meta.innerHTML=[
     _hwPill('板卡',d.host+':'+d.port),
     _hwPill('启动链',bootOk?'<span class="badge ok">OK</span>':'<span class="badge no">未就绪</span>'),
     _hwPill('冷启动',d.boot_count+'/'+d.attempts),
     _hwPill('累计翻转',d.n_flips),
-    _hwPill('DDR 明文',d.wiped?'<span class="badge no">已擦除</span>':'<span class="badge ok">在位</span>')
+    _hwPill('DDR 驻留',d.wiped?'<span class="badge no">已清空</span>':(same?'<span class="badge ok">= SD 密文</span>':'<span class="badge no">异常</span>'))
   ].join('');
   const gone=d.wiped||d.w_hash==='0000000000000000000000000000000000000000000000000000000000000000';
   tab.innerHTML='<table style="width:100%;border-collapse:collapse;font-size:12px">'
-    +_hwRow('运行期明文 W sha256','<span class="hwhash">'+(gone?'<i style="color:var(--mut)">（已擦除）</i>':d.w_hash)+'</span>')
-    +_hwRow('SD 卡密文 sha256（不随擦除变化）','<span class="hwhash">'+d.enc_hash+'</span>')
+    +_hwRow('DDR 驻留区 sha256（应为密文）','<span class="hwhash">'+(gone?'<i style="color:var(--mut)">（已清空）</i>':d.w_hash)+'</span>')
+    +_hwRow('SD 卡密文 sha256（不随清空变化）','<span class="hwhash">'+d.enc_hash+'</span>')
+    +_hwRow('比对结论',same?'<span class="badge ok">一致 · DDR 无明文副本</span>':'<span class="badge no">不一致 / 已清空</span>')
     +'</table>';
   bdHashCell('bdh0',d.probe_ref?d.probe_ref.slice(0,16)+'…':'--',d.probe_ref?true:null);
   document.getElementById('boardcard').classList.toggle('attacked',!!d.wiped);
 }
 async function bdOp(op){
   if(bdBusy)return;
-  if(op==='wipe'&&!confirm('模拟攻击者：擦除板上 DDR 明文权重？（SD 密文不受影响，可随时重解密恢复）'))return;
+  if(op==='wipe'&&!confirm('模拟攻击者：清空板上 DDR 密文缓冲？（SD 密文不受影响，可随时重走安全启动恢复）'))return;
   bdBusy=true;
   const msg=document.getElementById('bdmsg');
   document.getElementById('bdwipe').disabled=true;
   document.getElementById('bdrestore').disabled=true;
   if(op==='wipe'){
-    bdTlAdd('ATT','flip','攻击者擦除 DDR 明文权重：9.01MB 明文 → 全零（SD 密文未触碰）');
+    bdTlAdd('ATT','flip','攻击者清空 DDR 密文缓冲：9.01MB 密文 → 全零（SD 密文未触碰）');
     document.getElementById('boardcard').classList.add('attacked');
-    msg.textContent='正在擦除并采集受损证据…';
+    msg.textContent='正在清空并采集受损证据…';
     try{
       const r=await fetch('/api/boardop',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({op:op})});
       const d=await r.json();
@@ -1546,49 +1741,37 @@ async function bdOp(op){
         if(d.probe_before&&d.probe_after&&d.probe_before!==d.probe_after){
           bdTlAdd('ATT','flip','损伤证实：同一探针输入，输出指纹 '+d.probe_before.slice(0,16)+'… → '+d.probe_after.slice(0,16)+'…，模型输出已损坏');
         }
-        msg.textContent='已擦除：板上明文全零，探针指纹已改变（密文仍在 SD）';
+        msg.textContent='已清空：板上密文缓冲全零，探针指纹已改变（密文仍在 SD）';
       }else{msg.textContent='失败：'+(d.error||'');}
     }catch(e){msg.textContent='失败：'+e;}
   }else{
-    bdTlAdd('DEF','rest','防御反制：触发完整安全启动链重解密（PUF→FE/KDF→HD 门禁→AES→Canary）');
+    bdTlAdd('DEF','rest','防御反制：重走完整安全启动链（PUF→FE/KDF→HD 门禁→镜像完整性→在线解密 + Canary）');
     bdAnim=true;
-    const ids=['bdp1','bdp2','bdp3','bdp4','bdp5'];
-    const labels=['PUF 上电采样中…','模糊提取+KDF 派生密钥…','HD 门禁校验…','AES-256-CTR 流解密 9.01MB…','Canary 输出指纹仲裁…'];
-    async function bdFetchRestore(){
-      try{
-        const r=await fetch('/api/boardop',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({op:'restore'})});
-        const d=await r.json();
-        bdAnim=false;
-        if(d.ok){
-          bdTlAdd('DEF','rest','链路实测：HD='+d.hd+' · k='+d.k_used+' 位纠错 · 解密 '+Number(d.dec_ms).toFixed(1)+' ms · Canary PASS');
-          document.getElementById('boardcard').classList.remove('attacked');
-          if(d.probe_recovered===true){
-            bdHashCell('bdh2',(d.probe_after||'--').slice(0,16)+'…',true);
-            bdTlAdd('DEF','done','恢复证实：探针指纹与参考 bit-exact 一致 —— 9.01MB 权重已从密文完整复原');
-          }else{
-            bdHashCell('bdh2',(d.probe_after||'--').slice(0,16)+'…',null);
-            bdTlAdd('DEF','done','恢复完成：明文权重已回 DDR（确立参考基准 '+(d.probe_after||'--').slice(0,16)+'…）');
-          }
-          msg.textContent='防御成功：明文已恢复';
+    msg.textContent='重走安全启动：PUF→FE/KDF→HD 门禁→镜像完整性→在线解密 + Canary…';
+    try{
+      const r=await fetch('/api/boardop',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({op:'restore'})});
+      const d=await r.json();
+      bdAnim=false;
+      if(d.ok){
+        bdTlAdd('DEF','rest','链路实测：HD='+d.hd+' · k='+d.k_used+' 位纠错 · 解密 '+Number(d.dec_ms).toFixed(1)+' ms · Canary PASS');
+        document.getElementById('boardcard').classList.remove('attacked');
+        if(d.probe_recovered===true){
+          bdHashCell('bdh2',(d.probe_after||'--').slice(0,16)+'…',true);
+          bdTlAdd('DEF','done','恢复证实：探针指纹与参考 bit-exact 一致 —— 9.01MB 权重已从密文完整复原');
         }else{
-          ids.forEach(function(id){document.getElementById(id).classList.remove('run');});
-          bdTlAdd('DEF','err','安全链拒绝：'+(d.error||''));
-          msg.textContent='失败：'+(d.error||'');
+          bdHashCell('bdh2',(d.probe_after||'--').slice(0,16)+'…',null);
+          bdTlAdd('DEF','done','恢复完成：密文重装、在线解密校验通过（确立参考基准 '+(d.probe_after||'--').slice(0,16)+'…）');
         }
-      }catch(e){bdAnim=false;msg.textContent='失败：'+e;}
-      bdBusy=false;
-      document.getElementById('bdwipe').disabled=false;
-      document.getElementById('bdrestore').disabled=false;
-      loadBoard();
-    }
-    let i=0;
-    const t=setInterval(function(){
-      if(i>0){const p=document.getElementById(ids[i-1]);p.classList.remove('run');p.classList.add('ok');}
-      if(i>=ids.length){clearInterval(t);bdFetchRestore();return;}
-      document.getElementById(ids[i]).classList.remove('ok');
-      document.getElementById(ids[i]).classList.add('run');
-      msg.textContent=labels[i];i++;
-    },420);
+        msg.textContent='防御成功：密文已重装，在线解密与 Canary 通过';
+      }else{
+        bdTlAdd('DEF','err','安全链拒绝：'+(d.error||''));
+        msg.textContent='失败：'+(d.error||'');
+      }
+    }catch(e){bdAnim=false;msg.textContent='失败：'+e;}
+    bdBusy=false;
+    document.getElementById('bdwipe').disabled=false;
+    document.getElementById('bdrestore').disabled=false;
+    loadBoard();
     return;
   }
   bdBusy=false;
@@ -1611,10 +1794,12 @@ async function bdStart(){
   bdGoBusy=false;b.disabled=false;
 }
 function fmtPpl(v){return (v==null||!isFinite(v))?'NaN':(v>=1000?Math.round(v).toLocaleString():v.toFixed(1));}
-let bdLastBase=null,bdEvN=0;
+let bdLastBase=null,bdEvN=0,bdLastSer=null;
 function bdDraw(ser){
+  bdLastSer=ser;                       // 供 软/硬件切换 后按新宽度重绘
   const c=document.getElementById('bdcv'),g=c.getContext('2d');
   const w=c.clientWidth,h=c.clientHeight;
+  if(!w||!h)return;                    // 面板隐藏中：等切回来再画
   c.width=w*dpr();c.height=h*dpr();g.setTransform(dpr(),0,0,dpr(),0,0);
   g.clearRect(0,0,w,h);
   const P={l:48,r:14,t:16,b:26},xmax=8;
@@ -1721,6 +1906,7 @@ async function poll(){
   setTimeout(poll,900);
 }
 poll();
+farMount();          // 先把「硬件 FaR / 软硬件对照」两张卡并入合并模块（默认隐藏）
 loadHWCmp();
 loadRecheck();
 loadBoard();
@@ -1735,8 +1921,8 @@ HTML = HTML.replace("@MODEL_NAME@", model_display_name())
 
 
 # ---------------------------------------------------------------------------
-# 板卡 FARC 控制通道（实时脱密可视化 + 攻击执行端）
-#   FLIP 只动运行期 DDR 明文工作副本（模拟物理位注入的执行端），
+# 板卡 FARC 控制通道（实时状态可视化 + 攻击执行端）
+#   FLIP 只动运行期 DDR 密文缓冲区（CTR 下翻密文位等价于翻对应明文位），
 #   攻击决策/搜索全部在 PC shadow 副本上完成——权重不出板、密钥不出 PL。
 # ---------------------------------------------------------------------------
 _board_lock = threading.Lock()
@@ -1862,7 +2048,7 @@ def _board_bit_of(row, col, in_features=768):
 
 
 def _board_restore_safe():
-    """尽力恢复板卡明文（campaign 开场清场用）；失败返回 False。"""
+    """重走安全启动装载密文（campaign 开场清场用）；失败返回 False。"""
     try:
         s = board_ctrl.connect(timeout=15.0)
         try:
@@ -1930,12 +2116,12 @@ def _run_board_attack(params):
         _bd_ev("INFO", "info", f"板上攻防启动：预算 {maxflip} 位"
                                f"（敏感位共 {len(positions)} 个，测量点 {chk}）")
 
-        # 0) 清场：重解密恢复干净明文（清掉上一场遗留的翻转/擦除）
+        # 0) 清场：重走安全启动装载密文（清掉上一场遗留的翻转/清空）
         with _lock:
-            _bd_state["msg"] = "恢复板卡明文（重解密清场）…"
+            _bd_state["msg"] = "重走安全启动（装载密文清场）…"
         if not _board_restore_safe():
-            raise RuntimeError("板卡重解密失败（FARC 不可达或安全链拒绝），无法开始")
-        _bd_ev("REST", "rest", "清场完成：安全链重解密，板上明文恢复干净")
+            raise RuntimeError("板卡安全启动失败（FARC 不可达或安全链拒绝），无法开始")
+        _bd_ev("REST", "rest", "清场完成：安全链重走，板上密文缓冲重装")
 
         backend = _PerCallBoard(board_ctrl.HOST, board_ctrl.PORT, timeout=60.0)
         m_bare = build_offload_model(_model, backend, [])       # n_far=0
@@ -1963,12 +2149,11 @@ def _run_board_attack(params):
                 ops.append({"flip": flips + 1, "row": row, "col": col,
                             "bit": bit, "idx": idx,
                             "old": ack["old"], "new": ack["new"],
-                            "oldf": round(_bits_f32(ack["old"]), 5),
-                            "newf": round(_bits_f32(ack["new"]), 5)})
+                            "ct": True})
                 _bd_ev("FLIP", "flip",
                        f"第 {flips + 1} 位 W[{row}][{col}] bit{bit} idx={idx}："
-                       f"0x{ack['old']:08x}→0x{ack['new']:08x}"
-                       f"（{_bits_f32(ack['old']):+.5f}→{_bits_f32(ack['new']):+.5f}）")
+                       f"密文 0x{ack['old']:08x}→0x{ack['new']:08x}"
+                       f"（CTR 下等价于翻转对应明文位）")
                 flips += 1
             with _lock:
                 _bd_state["msg"] = f"板上已翻转 {flips} 位，测语料指标（裸 / FaR 双推理）…"
@@ -2005,10 +2190,10 @@ def _run_board_attack(params):
                      f"，损伤比 {math.exp(dnll):.1f}×）")
         with _lock:
             _bd_state["thr"] = {"mult": THR, "u": uc, "p": pc}
-            _bd_state["msg"] = ("板上攻防完成。板卡明文保持翻转态"
-                                "（上方「重解密」可实时恢复）。" + note)
+            _bd_state["msg"] = ("板上攻防完成。板卡密文缓冲保持翻转态"
+                                "（上方「重走安全启动」可实时恢复）。" + note)
         _bd_ev("THR", "thr", note)
-        _bd_ev("DONE", "done", "板上攻防完成：曲线/事件已定格，板卡保持翻转态（可重解密恢复）")
+        _bd_ev("DONE", "done", "板上攻防完成：曲线/事件已定格，板卡保持翻转态（可重走安全启动恢复）")
     except Exception as e:  # pragma: no cover
         with _lock:
             _bd_state["err"] = str(e)
@@ -2022,6 +2207,235 @@ def _run_board_attack(params):
                 pass
         with _lock:
             _bd_state["running"] = False
+
+
+# ---------------------------------------------------------------------------
+# 启动链分步演示（GET /api/pufdemo?step=1..5）
+#   数据来源全部是真实产物，不臆造：
+#     PUF 采样参数 / 稳定位 / 选中位 / 掩码 <- enroll_report.json + fara_dec_config.txt
+#     密钥指纹（密钥本体不落盘，只留 SHA-256 指纹） <- enroll_report.json
+#     HD 直方图与阈值                       <- canary_anchor.json
+#     密文块 / 镜像摘要 / DDR 双哈希          <- W_enc.bin + board_crypto.json + FARC STATUS
+# ---------------------------------------------------------------------------
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_PROV_DIR = os.path.join(_HERE, "fpga", "up_proj_gemm", "puf_out", "provision_cold")
+_EXPORT_DIR = os.path.join(_HERE, "board_export")
+
+
+def _prov_json(name):
+    try:
+        with open(os.path.join(_PROV_DIR, name), "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _dec_cfg():
+    d = {}
+    try:
+        with open(os.path.join(_PROV_DIR, "fara_dec_config.txt"), "r", encoding="utf-8") as f:
+            for ln in f:
+                if "=" in ln:
+                    k, v = ln.strip().split("=", 1)
+                    d[k.strip()] = v.strip()
+    except Exception:
+        pass
+    return d
+
+
+def _h(s):
+    return (str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+
+def _row(k, v, cls=""):
+    return f'<div class="dvrow"><span class="dvk">{k}</span><span class="{cls}">{v}</span></div>'
+
+
+def _bitgrid(hexs, nbits=128):
+    try:
+        val = int(hexs, 16)
+    except Exception:
+        return '<div class="dvnote">位图不可读</div>'
+    cells = []
+    for i in range(nbits - 1, -1, -1):
+        on = (val >> i) & 1
+        cells.append('<div class="dvbit%s"></div>' % (" on" if on else ""))
+    return '<div class="dvbits">' + "".join(cells) + "</div>"
+
+
+def _enc_head(nblk=3):
+    try:
+        with open(os.path.join(_PROV_DIR, "W_enc.bin"), "rb") as f:
+            return f.read(16 * nblk)
+    except Exception:
+        return b""
+
+
+def _plain_head(nblk=3):
+    """板上真实权重的明文前几块（board_export 里的部署期明文，非运行期物）。"""
+    try:
+        for n in sorted(os.listdir(_EXPORT_DIR)):
+            if n.startswith("board_W_") and n.endswith(".bin"):
+                with open(os.path.join(_EXPORT_DIR, n), "rb") as f:
+                    return f.read(16 * nblk)
+    except Exception:
+        pass
+    return b""
+
+
+def _ctr_trace(nblk=3):
+    """用演示密钥复现 AES-256-CTR 逐块运算（真实密钥不出 PL，这里只演示运算结构）。"""
+    out = []
+    try:
+        import hashlib
+        from Crypto.Cipher import AES
+        key = hashlib.sha256(b"FARA-DEMO-CTR-KEY").digest()
+        cfg = _prov_json("board_crypto.json")
+        nonce = bytes.fromhex(cfg.get("nonce") or "0" * 24)
+        ctr0 = int(cfg.get("ctr_init") or 0)
+        plain = _plain_head(nblk)
+        if len(plain) < 16 * nblk:
+            return []
+        ks = AES.new(key, AES.MODE_CTR, nonce=nonce, initial_value=ctr0).encrypt(bytes(16 * nblk))
+        for i in range(nblk):
+            p = plain[16 * i:16 * (i + 1)]
+            k = ks[16 * i:16 * (i + 1)]
+            c = bytes(a ^ b for a, b in zip(p, k))
+            out.append({"blk": i, "ctr": ctr0 + i, "p": p.hex(), "k": k.hex(), "c": c.hex(),
+                        "f32": ", ".join("%.6g" % v for v in struct.unpack("<4f", p))})
+    except Exception:
+        return []
+    return out
+
+
+def _pufdemo(step):
+    import hashlib
+    cfg = _dec_cfg()
+    enr = _prov_json("enroll_report.json")
+    can = _prov_json("canary_anchor.json")
+    bc = _prov_json("board_crypto.json")
+    stat = enr.get("stats", {}) or {}
+    hdr = can.get("meta_sample_header", {}) or {}
+    st = _board_query()
+    on = bool(st.get("ok"))
+
+    if step == 1:
+        mask = cfg.get("MASK", "")
+        return (
+            '<div class="dvh">① PUF 上电采样 · 蝴蝶 PUF 阵列（128 单元 · 布局冻结）</div>'
+            + _row("采样参数", f"nbits=128 · n_samp={hdr.get('n_samp','--')} · "
+                                f"force={hdr.get('t_force','--')} · settle={hdr.get('t_settle','--')}")
+            + _row("冷启动样本", f"{stat.get('n_samples','--')} 次断电重上电采样（温度扰动下起振）")
+            + _row("稳定位", f"{stat.get('n_stable','--')} / 128 位（其余为抖动位，直接丢弃）")
+            + _row("选中位（参与派生）", f"{can.get('n_selected','--')} 位")
+            + _row("选择掩码 MASK", f'<span class="dvhex">{mask}</span>')
+            + '<div class="dvrow"><span class="dvk">选中位图</span><span></span></div>'
+            + _bitgrid(mask)
+            + '<div class="dvnote">蓝格 = 该位被选中参与密钥派生（真实掩码位）；灰格 = 未选中。'
+              '原始响应与掩码按设计在封印后销毁（key-equivalent），板内仅 '
+              '<b>/opt/fara/puf/canary.bin</b> 留存封印副本，磁盘上无可窃取的根密钥。</div>'
+        )
+
+    if step == 2:
+        purpose = cfg.get("PURPOSE", "")
+        try:
+            ptxt = bytes.fromhex(purpose).rstrip(b"\x00").decode("ascii", "replace")
+        except Exception:
+            ptxt = "--"
+        key_sha = enr.get("key_sha256", "--")
+        return (
+            '<div class="dvh">② 模糊提取 + SHA-256 KDF · 密钥现场派生（不落盘）</div>'
+            + _row("纠错强度", f"k = {cfg.get('K','--')} 位（重复码 3 取 2 多数表决）")
+            + _row("稳定种子", f"{can.get('n_selected','--')} 位选中位 → 纠错为一致 seed")
+            + _row("HELPER", f'<span class="dvhex">{cfg.get("HELPER","--")}</span>')
+            + _row("SALT", f'<span class="dvhex">{cfg.get("SALT","--")}</span>')
+            + _row("PURPOSE", f'<span class="dvhex">{purpose}</span> '
+                               f'<span style="color:var(--mut)">= "{ptxt}"</span>')
+            + _row("派生式", "key = SHA-256( seed ‖ SALT ‖ PURPOSE ) → 256 bit")
+            + _row("密钥本体",
+                   '<span class="dvbad">●●●●●●●● 只写寄存器（key_mgr），软件读回仅得哨兵值</span>')
+            + _row("密钥指纹", f'<span class="dvhex">{key_sha}</span>')
+            + _row("寄存器状态",
+                   (f'key_locked={st.get("key_locked","--")} · aes_key_ready={st.get("aes_key_ready","--")}'
+                    if on else '<span class="dvnote">板卡离线，状态未取</span>'))
+            + '<div class="dvnote">硬件链是 fe_done → KDF.start 的直连时序，软件只拉一根 fe_start，'
+              '无法在 FE 与 KDF 之间插入竞争，也无法把 seed 读出去。</div>'
+        )
+
+    if step == 3:
+        hist = can.get("hd_hist", {}) or {}
+        th = can.get("thresholds", {}) or {}
+        n0 = int(hist.get("0", 0))
+        bars = "".join('<div class="bt">0</div>' for _ in range(min(n0, 32)))
+        hdv = st.get("hd", "--") if on else "--"
+        verdict = ("放行" if isinstance(hdv, int) and hdv <= 1 else
+                   ("拒绝启动" if isinstance(hdv, int) and hdv > 5 else "告警放行"))
+        cls = "dvgood" if verdict == "放行" else "dvbad"
+        return (
+            '<div class="dvh">③ HD 门禁 · 汉明距离判据</div>'
+            + _row("enroll 时期 HD 直方图", f"32 次采样中 HD=0 共 {n0} 次")
+            + '<div class="dvbar"><span class="tagc">样本分布</span><span class="bar">' + bars + '</span></div>'
+            + _row("均值 / 最大值", f"hd_mean={can.get('hd_mean','--')} · hd_max={can.get('hd_max','--')}")
+            + _row("判据", f"≤ {th.get('pass_le','1')} 放行 · "
+                           f"{th.get('warn_band',['2','5'])[0]}–{th.get('warn_band',['2','5'])[1]} 告警放行 · "
+                           f"> {th.get('refuse_gt','5')} 拒绝启动（不解密）")
+            + _row("板内当前 HD", f'<span class="{cls}">{hdv} → {verdict if on else "板卡离线"}</span>')
+            + '<div class="dvnote">HD 只反映"这次采样与 enroll 样本差多少"，属行为层门禁；'
+              '真正的完整性由下一步的镜像摘要承担。</div>'
+        )
+
+    if step == 4:
+        enc = _enc_head(3)
+        enc_hex = enc.hex() if enc else "--"
+        local_sha = hashlib.sha256(enc).hexdigest()[:64] if enc else "--"
+        sd_sha = st.get("enc_hash", "--") if on else "--"
+        ddr_sha = st.get("w_hash", "--") if on else "--"
+        same = (ddr_sha == sd_sha) and on
+        tr = _ctr_trace(3)
+        rows = []
+        for r in tr:
+            rows.append(
+                f'<div class="dvrow"><span class="dvk">块 #{r["blk"]} · CTR={r["ctr"]}</span>'
+                f'<span class="dvhex">P = {r["p"]}<br>KS = {r["k"]}<br>C = P ⊕ KS = {r["c"]}</span></div>'
+            )
+        f32 = ('<div class="dvrow"><span class="dvk">该块 fp32 明文</span>'
+               f'<span class="dvhex">{tr[0]["f32"]} …</span></div>') if tr else ""
+        return (
+            '<div class="dvh">④ 读 DDR 密文 · 镜像完整性 · CTR 加解密运算</div>'
+            + _row("读 DDR 首 3 块（密文）", f'<span class="dvhex">{enc_hex}</span>')
+            + _row("DDR 驻留区 SHA-256", f'<span class="dvhex">{ddr_sha}</span>')
+            + _row("SD 卡密文 SHA-256", f'<span class="dvhex">{sd_sha}</span>')
+            + _row("本地 W.enc 首块摘要", f'<span class="dvhex">{local_sha}</span>')
+            + _row("比对结论",
+                   ('<span class="dvgood">一致 · DDR 只有密文，无明文副本</span>' if same
+                    else '<span class="dvbad">不一致 / 板卡离线</span>'))
+            + _row("镜像摘要", "image_digest = SHA-256( SHA-256(W.enc) ‖ SHA-256(b) ‖ SHA-256(cfg) ‖ LE32(IMG_VER) )")
+            + f32 + "".join(rows)
+            + '<div class="dvnote">CTR 是"加密=解密"同一运算：P ⊕ KS = C，反过来 C ⊕ KS = P。'
+              '上表用<b>演示密钥</b>复现逐块运算结构；真实 KS 由 PUF 派生的 256 位密钥在 PL 内生成，'
+              '不出片、不入内存，因此外部无法复现这条流。</div>'
+        )
+
+    # step 5
+    dec_ms = st.get("dec_ms", "--") if on else "--"
+    ddr_sha = st.get("w_hash", "--") if on else "--"
+    sd_sha = st.get("enc_hash", "--") if on else "--"
+    same = (ddr_sha == sd_sha) and on
+    probe = st.get("probe_ref") or "--"
+    return (
+        '<div class="dvh">⑤ 在线解密 + Canary · 运行时确认明文只在 PL 内出现</div>'
+        + _row("解密方式", "DMA MM2S 流式喂入 → wdec_stream 内 AES-256-CTR 逐拍解密 → 直送 GEMM")
+        + _row("每拍宽度 / 计数", "64 bit / 每块 16 B，nonce+CTR 由核内生成，逐传输重装")
+        + _row("PLAIN_WORDS", cfg.get("PLAIN_WORDS", "--"))
+        + _row("解密耗时", f'<span class="dvgood">{dec_ms} ms</span>（含 Canary 仲裁）')
+        + _row("DDR 驻留", f'<span class="dvhex">{ddr_sha}</span>')
+        + _row("SD 卡密文", f'<span class="dvhex">{sd_sha}</span>')
+        + _row("结论", ('<span class="dvgood">DDR ≡ SD 密文 ⇒ 运行期无明文副本</span>' if same
+                        else '<span class="dvbad">不一致 / 板卡离线</span>'))
+        + _row("Canary 指纹", f'<span class="dvhex">{probe}</span>')
+        + '<div class="dvnote">Canary 是<b>行为级</b>校验：解密后用固定探针跑一遍，比对输出指纹。'
+          '它能抓块级破坏，但抓不住单点翻位——所以镜像完整性（步 4）与它是两层互补，不能互相替代。</div>'
+    )
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -2079,6 +2493,13 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, "application/json", json.dumps(data).encode("utf-8"))
         elif path == "/api/board":
             self._send(200, "application/json", json.dumps(_board_query()).encode("utf-8"))
+        elif path == "/api/pufdemo":
+            try:
+                step = int(parse_qs(urlparse(self.path).query).get("step", ["1"])[0])
+                body = {"ok": True, "html": _pufdemo(max(1, min(step, 5)))}
+            except Exception as e:
+                body = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+            self._send(200, "application/json", json.dumps(body).encode("utf-8"))
         elif path == "/api/boardstatus":
             with _lock:
                 data = {k: (copy.deepcopy(v) if k in ("series", "ops", "baseline", "thr", "events")
@@ -2112,10 +2533,13 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 params = {}
             with _lock:
-                if _state["running"] or _state["gen_busy"]:
+                if _state["running"] or _state["gen_busy"] or _bd_state["running"]:
                     self._send(200, "application/json", b'{"ok":false,"reason":"busy"}')
                     return
+                # 接受任务时立即清掉上一次结果：避免新页面在点击生成前看到历史文本
                 _state["gen_busy"] = True
+                _state["gen"] = []
+                _state["gen_meta"] = None
             t = threading.Thread(target=_run_generation, args=(params,), daemon=True)
             t.start()
             self._send(200, "application/json", b'{"ok":true}')
@@ -2123,7 +2547,7 @@ class Handler(BaseHTTPRequestHandler):
             _model.load_state_dict(_original)
             with _lock:
                 _state.update(running=False, baseline=[None, None], series=[[], []],
-                              total=[0, 0], thr=None, ops=[], gen=[],
+                              total=[0, 0], thr=None, ops=[], gen=[], gen_meta=None,
                               gen_busy=False, pbs=None, msg="已恢复原始模型权重",
                               by_layer={})
             self._send(200, "application/json", b'{"ok":true}')

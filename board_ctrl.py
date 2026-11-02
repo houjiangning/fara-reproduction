@@ -2,10 +2,10 @@
 
 8-x 实时集成的 PC 端调用器，attack_dashboard 的 /api/board 直接复用本模块：
 
-  STATUS   查询板卡安全启动链现场（HD/解密耗时/Canary）+ W/密文双 hash
-  FLIP     下发位翻转指令（攻击者物理位注入的执行端；决策搜索仍在 PC）
-  WIPE     清零板上常驻明文 W
-  RESTORE  板上从 SD 密文重新解密（PUF->FE/KDF->AES->Canary，约 100ms）
+  STATUS   查询板卡安全启动链现场（HD/镜像摘要/probe 耗时）+ DDR 与 SD 双 hash
+  FLIP     下发位翻转指令（作用于运行期 DDR 密文缓冲；CTR 下等价于翻明文位）
+  WIPE     清空板上常驻密文缓冲
+  RESTORE  重走安全启动（PUF->FE/KDF->HD->镜像摘要->在线解密 probe->Canary，约 400ms）
 
 用法：
   python board_ctrl.py status
@@ -121,11 +121,11 @@ def main(argv):
             print(f"[flip] W[{r['idx']}] {r['old']:#010x} -> {r['new']:#010x}")
         elif cmd == "wipe":
             wipe(s)
-            print("[wipe] 常驻明文 W 已清零")
+            print("[wipe] 常驻密文缓冲已清空")
         elif cmd == "restore":
             st, d = restore(s)
             _fmt_status("restore", d)
-            print(f"[restore] {'OK 权重已重解密+Canary 通过' if st == 0 else 'REFUSED 安全链拒绝'}")
+            print(f"[restore] {'OK 密文已重装，在线解密+Canary 通过' if st == 0 else 'REFUSED 安全链拒绝'}")
         elif cmd == "smoke":
             d0 = get_status(s)
             _fmt_status("0初始", d0)
